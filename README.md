@@ -40,8 +40,6 @@ That's it. No flags, no arguments. A TUI opens with all your conversations liste
 | Key | Action |
 |---|---|
 | `↑` / `↓` | Move selection |
-| `Ctrl+N` / `Ctrl+P` | Move selection (alt) |
-| `Ctrl+D` / `Ctrl+U` | Half-page down / up |
 | `Page Up` / `Page Down` | Jump by page |
 | `Home` / `End` | Jump to first / last |
 | `Enter` | Resume selected conversation |
@@ -54,16 +52,6 @@ That's it. No flags, no arguments. A TUI opens with all your conversations liste
 - **Underscore as separator**: `api key` matches `API_KEY`
 - **Prefix matching**: `auth` matches `authentication`
 - **Multi-word**: all words must match (AND logic)
-
-## Configuration
-
-Optional config at `~/.config/claude-history/config.toml`:
-
-```toml
-[resume]
-# Arguments passed to `claude` when resuming
-default_args = ["--dangerously-skip-permissions"]
-```
 
 ## Credits
 

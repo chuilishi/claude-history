@@ -1,6 +1,5 @@
 mod claude;
 mod cli;
-mod config;
 mod error;
 mod history;
 mod tui;
@@ -28,9 +27,6 @@ fn main() {
 
 fn run() -> Result<()> {
     let _args = Args::parse();
-    let config = config::load_config()?;
-    let resume_config = config.resume.unwrap_or_default();
-    let default_args = resume_config.default_args.as_deref().unwrap_or(&[]);
 
     let rx = history::load_all_conversations_streaming();
 
@@ -38,7 +34,7 @@ fn run() -> Result<()> {
         (tui::Action::Resume(path), convs) => {
             let conv = convs.iter().find(|c| c.path == path);
             let project_path = conv.and_then(|c| c.project_path.as_ref());
-            resume_with_claude(&path, project_path, default_args)?;
+            resume_with_claude(&path, project_path)?;
         }
         (tui::Action::Quit, _) => return Err(AppError::SelectionCancelled),
     }
@@ -49,7 +45,6 @@ fn run() -> Result<()> {
 fn resume_with_claude(
     selected_path: &Path,
     project_path: Option<&PathBuf>,
-    default_args: &[String],
 ) -> Result<()> {
     let conversation_id = selected_path
         .file_stem()
@@ -76,7 +71,6 @@ fn resume_with_claude(
 
     let mut command = Command::new("claude");
     command.args(["--resume", &conversation_id]);
-    command.args(default_args);
     command.current_dir(project_dir);
 
     run_claude_command(command)

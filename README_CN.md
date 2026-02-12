@@ -40,8 +40,6 @@ claude-history
 | 按键 | 功能 |
 |---|---|
 | `↑` / `↓` | 移动选择 |
-| `Ctrl+N` / `Ctrl+P` | 移动选择（替代键） |
-| `Ctrl+D` / `Ctrl+U` | 半页下翻 / 上翻 |
 | `Page Up` / `Page Down` | 整页跳转 |
 | `Home` / `End` | 跳到第一个 / 最后一个 |
 | `Enter` | 恢复选中的对话 |
@@ -54,16 +52,6 @@ claude-history
 - **下划线视为分隔符**：`api key` 匹配 `API_KEY`
 - **前缀匹配**：`auth` 匹配 `authentication`
 - **多关键词**：所有关键词必须同时匹配（AND 逻辑）
-
-## 配置
-
-可选配置文件 `~/.config/claude-history/config.toml`：
-
-```toml
-[resume]
-# 恢复对话时传给 claude 命令的参数
-default_args = ["--dangerously-skip-permissions"]
-```
 
 ## 致谢
 

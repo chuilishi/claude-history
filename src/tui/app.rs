@@ -160,21 +160,6 @@ impl App {
         }
     }
 
-    fn select_half_page_up(&mut self, viewport_height: usize) {
-        if let Some(selected) = self.selected {
-            let half_page = viewport_height / 2;
-            self.selected = Some(selected.saturating_sub(half_page));
-        }
-    }
-
-    fn select_half_page_down(&mut self, viewport_height: usize) {
-        if let Some(selected) = self.selected {
-            let half_page = viewport_height / 2;
-            let new_selected = (selected + half_page).min(self.filtered.len().saturating_sub(1));
-            self.selected = Some(new_selected);
-        }
-    }
-
     fn get_selected_path(&self) -> Option<PathBuf> {
         self.selected
             .and_then(|sel| self.filtered.get(sel))
@@ -263,7 +248,6 @@ impl App {
         &mut self,
         code: KeyCode,
         modifiers: KeyModifiers,
-        viewport_height: usize,
     ) -> Option<Action> {
         if self.is_loading() {
             return self.handle_loading_key(code, modifiers);
@@ -306,22 +290,6 @@ impl App {
             }
             KeyCode::PageDown => {
                 self.select_page_down();
-                None
-            }
-            KeyCode::Char('n') if modifiers.contains(KeyModifiers::CONTROL) => {
-                self.select_next();
-                None
-            }
-            KeyCode::Char('p') if modifiers.contains(KeyModifiers::CONTROL) => {
-                self.select_prev();
-                None
-            }
-            KeyCode::Char('d') if modifiers.contains(KeyModifiers::CONTROL) => {
-                self.select_half_page_down(viewport_height);
-                None
-            }
-            KeyCode::Char('u') if modifiers.contains(KeyModifiers::CONTROL) => {
-                self.select_half_page_up(viewport_height);
                 None
             }
             KeyCode::Char('w') if modifiers.contains(KeyModifiers::CONTROL) => {
@@ -393,22 +361,6 @@ impl App {
             }
             KeyCode::Down => {
                 self.select_next();
-                None
-            }
-            KeyCode::Char('n') if modifiers.contains(KeyModifiers::CONTROL) => {
-                self.select_next();
-                None
-            }
-            KeyCode::Char('p') if modifiers.contains(KeyModifiers::CONTROL) => {
-                self.select_prev();
-                None
-            }
-            KeyCode::PageUp => {
-                self.select_page_up();
-                None
-            }
-            KeyCode::PageDown => {
-                self.select_page_down();
                 None
             }
             KeyCode::Char('w') if modifiers.contains(KeyModifiers::CONTROL) => {
@@ -538,16 +490,13 @@ pub fn run_with_loader(
             }
         }
 
-        let frame_area = guard.terminal.get_frame().area();
-        let viewport_height = frame_area.height.saturating_sub(3) as usize;
-
         guard.terminal.draw(|frame| ui::render(frame, &app))?;
 
         if event::poll(Duration::from_millis(50)).map_err(|e| AppError::Io(io::Error::other(e)))?
             && let Event::Key(key) = event::read().map_err(|e| AppError::Io(io::Error::other(e)))?
             && key.kind == KeyEventKind::Press
         {
-            if let Some(action) = app.handle_key(key.code, key.modifiers, viewport_height) {
+            if let Some(action) = app.handle_key(key.code, key.modifiers) {
                 return Ok((action, app.into_conversations()));
             }
         }

@@ -20,12 +20,6 @@
 ## 安装
 
 ```sh
-cargo install --path .
-```
-
-或者从仓库安装：
-
-```sh
 cargo install --git https://github.com/chuilishi/claude-history
 ```
 
@@ -34,24 +28,6 @@ cargo install --git https://github.com/chuilishi/claude-history
 ```sh
 claude-history
 ```
-
-就这么简单。不需要任何参数。TUI 界面会列出所有对话（按时间倒序），输入关键词搜索：
-
-| 按键 | 功能 |
-|---|---|
-| `↑` / `↓` | 移动选择 |
-| `Page Up` / `Page Down` | 整页跳转 |
-| `Home` / `End` | 跳到第一个 / 最后一个 |
-| `Enter` | 恢复选中的对话 |
-| `Ctrl+W` | 删除光标前的单词 |
-| `Esc` / `Ctrl+C` | 退出 |
-
-### 搜索
-
-- **大小写不敏感**：`config` 匹配 `CONFIG`
-- **下划线视为分隔符**：`api key` 匹配 `API_KEY`
-- **前缀匹配**：`auth` 匹配 `authentication`
-- **多关键词**：所有关键词必须同时匹配（AND 逻辑）
 
 ## 致谢
 

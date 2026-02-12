@@ -20,12 +20,6 @@ Run `claude-history` anywhere → fuzzy-search across **all** projects → press
 ## Install
 
 ```sh
-cargo install --path .
-```
-
-Or, if cloned from the repo:
-
-```sh
 cargo install --git https://github.com/chuilishi/claude-history
 ```
 
@@ -34,24 +28,6 @@ cargo install --git https://github.com/chuilishi/claude-history
 ```sh
 claude-history
 ```
-
-That's it. No flags, no arguments. A TUI opens with all your conversations listed by recency. Type to search, then:
-
-| Key | Action |
-|---|---|
-| `↑` / `↓` | Move selection |
-| `Page Up` / `Page Down` | Jump by page |
-| `Home` / `End` | Jump to first / last |
-| `Enter` | Resume selected conversation |
-| `Ctrl+W` | Delete word before cursor |
-| `Esc` / `Ctrl+C` | Quit |
-
-### Search
-
-- **Case-insensitive**: `config` matches `CONFIG`
-- **Underscore as separator**: `api key` matches `API_KEY`
-- **Prefix matching**: `auth` matches `authentication`
-- **Multi-word**: all words must match (AND logic)
 
 ## Credits
 

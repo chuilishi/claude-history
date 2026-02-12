@@ -163,10 +163,7 @@ mod tests {
             project_path: None,
             cwd: None,
             message_count: 1,
-            parse_errors: vec![],
             summary: None,
-            model: None,
-            total_tokens: 0,
             duration_minutes: None,
         }
     }

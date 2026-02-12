@@ -1,11 +1,14 @@
+#[allow(dead_code)]
 use crate::cli::DebugLevel;
 
 /// Check if a message at `msg_level` should be printed given the configured `min_level`
+#[allow(dead_code)]
 pub fn should_log(min_level: DebugLevel, msg_level: DebugLevel) -> bool {
     msg_level >= min_level
 }
 
 /// Print a debug-level message if the minimum level allows it
+#[allow(dead_code)]
 pub fn debug(min_level: Option<DebugLevel>, message: &str) {
     if let Some(level) = min_level
         && should_log(level, DebugLevel::Debug)
@@ -15,6 +18,7 @@ pub fn debug(min_level: Option<DebugLevel>, message: &str) {
 }
 
 /// Print an info-level message if the minimum level allows it
+#[allow(dead_code)]
 pub fn info(min_level: Option<DebugLevel>, message: &str) {
     if let Some(level) = min_level
         && should_log(level, DebugLevel::Info)
@@ -24,6 +28,7 @@ pub fn info(min_level: Option<DebugLevel>, message: &str) {
 }
 
 /// Print a warn-level message if the minimum level allows it
+#[allow(dead_code)]
 pub fn warn(min_level: Option<DebugLevel>, message: &str) {
     if let Some(level) = min_level
         && should_log(level, DebugLevel::Warn)
@@ -33,6 +38,7 @@ pub fn warn(min_level: Option<DebugLevel>, message: &str) {
 }
 
 /// Print an error-level message if the minimum level allows it
+#[allow(dead_code)]
 pub fn error(min_level: Option<DebugLevel>, message: &str) {
     if let Some(level) = min_level
         && should_log(level, DebugLevel::Error)

@@ -2,13 +2,20 @@ use crate::error::{AppError, Result};
 use crate::history::{hidden, Conversation, LoaderMessage};
 use crate::tui::search::{self, SearchableConversation};
 use crate::tui::ui;
-use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::event::{
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
+    MouseButton, MouseEvent, MouseEventKind,
+};
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use ratatui::prelude::*;
+use std::cell::Cell;
 use std::io::{self, Stdout};
 use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+/// Max gap between two clicks on the same item to count as a double-click
+const DOUBLE_CLICK: Duration = Duration::from_millis(400);
 
 /// Result of running the TUI
 pub enum Action {
@@ -35,6 +42,10 @@ pub struct App {
     loading_state: LoadingState,
     /// Path armed by the first Ctrl+D; a second Ctrl+D on the same item hides it
     pending_hide: Option<PathBuf>,
+    /// List area from the last render, used to map mouse clicks to items
+    list_area: Cell<Rect>,
+    /// Time and list index of the last left click, for double-click detection
+    last_click: Option<(Instant, usize)>,
 }
 
 impl App {
@@ -49,6 +60,8 @@ impl App {
             cursor_pos: 0,
             loading_state: LoadingState::Loading { loaded: 0 },
             pending_hide: None,
+            list_area: Cell::new(Rect::default()),
+            last_click: None,
         }
     }
 
@@ -187,6 +200,63 @@ impl App {
 
     pub fn query_words(&self) -> &[String] {
         &self.query_words
+    }
+
+    pub fn set_list_area(&self, area: Rect) {
+        self.list_area.set(area);
+    }
+
+    /// Map a screen position to an index into `filtered`, mirroring the paging in `ui::render_list`
+    fn item_at(&self, column: u16, row: u16) -> Option<usize> {
+        let area = self.list_area.get();
+        if !area.contains(Position::new(column, row)) {
+            return None;
+        }
+        let items_per_page = area.height as usize / ui::LINES_PER_ITEM;
+        let row_in_page = (row - area.y) as usize / ui::LINES_PER_ITEM;
+        if row_in_page >= items_per_page {
+            return None;
+        }
+        let offset = self
+            .selected
+            .map(|sel| (sel / items_per_page) * items_per_page)
+            .unwrap_or(0);
+        let idx = offset + row_in_page;
+        (idx < self.filtered.len()).then_some(idx)
+    }
+
+    /// Handle a mouse event: wheel moves the selection, click selects, double-click resumes
+    pub fn handle_mouse(&mut self, mouse: MouseEvent) -> Option<Action> {
+        match mouse.kind {
+            MouseEventKind::ScrollUp => {
+                self.pending_hide = None;
+                self.select_prev();
+                None
+            }
+            MouseEventKind::ScrollDown => {
+                self.pending_hide = None;
+                self.select_next();
+                None
+            }
+            MouseEventKind::Down(MouseButton::Left) => {
+                self.pending_hide = None;
+                let idx = self.item_at(mouse.column, mouse.row)?;
+                self.selected = Some(idx);
+
+                let now = Instant::now();
+                let is_double_click = matches!(
+                    self.last_click,
+                    Some((at, last_idx)) if last_idx == idx && now.duration_since(at) < DOUBLE_CLICK
+                );
+                if is_double_click && !self.is_loading() {
+                    self.last_click = None;
+                    return self.get_selected_path().map(Action::Resume);
+                }
+                self.last_click = Some((now, idx));
+                None
+            }
+            _ => None,
+        }
     }
 
     pub fn is_hide_pending(&self) -> bool {
@@ -474,7 +544,7 @@ impl TerminalGuard {
         terminal::enable_raw_mode().map_err(|e| AppError::Io(io::Error::other(e)))?;
 
         let mut stdout = io::stdout();
-        if let Err(e) = crossterm::execute!(stdout, EnterAlternateScreen) {
+        if let Err(e) = crossterm::execute!(stdout, EnterAlternateScreen, EnableMouseCapture) {
             let _ = terminal::disable_raw_mode();
             return Err(AppError::Io(io::Error::other(e)));
         }
@@ -484,7 +554,8 @@ impl TerminalGuard {
             Ok(t) => t,
             Err(e) => {
                 let _ = terminal::disable_raw_mode();
-                let _ = crossterm::execute!(io::stdout(), LeaveAlternateScreen);
+                let _ =
+                    crossterm::execute!(io::stdout(), DisableMouseCapture, LeaveAlternateScreen);
                 return Err(AppError::Io(io::Error::other(e)));
             }
         };
@@ -496,7 +567,11 @@ impl TerminalGuard {
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
         let _ = terminal::disable_raw_mode();
-        let _ = crossterm::execute!(self.terminal.backend_mut(), LeaveAlternateScreen);
+        let _ = crossterm::execute!(
+            self.terminal.backend_mut(),
+            DisableMouseCapture,
+            LeaveAlternateScreen
+        );
     }
 }
 
@@ -508,7 +583,7 @@ pub fn run_with_loader(
     let original_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |panic_info| {
         let _ = terminal::disable_raw_mode();
-        let _ = crossterm::execute!(io::stdout(), LeaveAlternateScreen);
+        let _ = crossterm::execute!(io::stdout(), DisableMouseCapture, LeaveAlternateScreen);
         original_hook(panic_info);
     }));
 
@@ -550,11 +625,16 @@ pub fn run_with_loader(
 
         guard.terminal.draw(|frame| ui::render(frame, &app))?;
 
-        if event::poll(Duration::from_millis(50)).map_err(|e| AppError::Io(io::Error::other(e)))?
-            && let Event::Key(key) = event::read().map_err(|e| AppError::Io(io::Error::other(e)))?
-            && key.kind == KeyEventKind::Press
-        {
-            if let Some(action) = app.handle_key(key.code, key.modifiers) {
+        if event::poll(Duration::from_millis(50)).map_err(|e| AppError::Io(io::Error::other(e)))? {
+            let action = match event::read().map_err(|e| AppError::Io(io::Error::other(e)))? {
+                // Only handle key press events (not release)
+                Event::Key(key) if key.kind == KeyEventKind::Press => {
+                    app.handle_key(key.code, key.modifiers)
+                }
+                Event::Mouse(mouse) => app.handle_mouse(mouse),
+                _ => None,
+            };
+            if let Some(action) = action {
                 return Ok((action, app.into_conversations()));
             }
         }

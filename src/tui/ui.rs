@@ -5,7 +5,7 @@ use ratatui::prelude::*;
 use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, Paragraph};
 
 /// Lines per conversation item (header + preview + separator)
-const LINES_PER_ITEM: usize = 3;
+pub const LINES_PER_ITEM: usize = 3;
 
 /// Render the TUI
 pub fn render(frame: &mut Frame, app: &App) {
@@ -132,6 +132,7 @@ fn render_search_bar(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn render_list(frame: &mut Frame, app: &App, area: Rect) {
+    app.set_list_area(area);
     let width = area.width as usize;
     let query_words: Vec<&str> = app.query_words().iter().map(|s| s.as_str()).collect();
 

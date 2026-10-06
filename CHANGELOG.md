@@ -5,6 +5,8 @@
 - Added `Ctrl+D` (press twice) to hide a conversation from the list. Hidden
   session IDs are stored in `~/.claude-history/hidden`; Claude Code's own files
   are never modified
+- Added mouse support: click to select, double-click to resume, scroll wheel to
+  move the selection
 
 ## v0.1.25 (2026-02-11)
 

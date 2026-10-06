@@ -44,8 +44,9 @@ jobs:
         run: |
           dir="target/${{ matrix.target }}/release"
           if [[ "${{ runner.os }}" == "Windows" ]]; then
-            archive="${BIN_NAME}-${{ matrix.platform }}.zip"
-            (cd "$dir" && 7z a "$GITHUB_WORKSPACE/$archive" "${BIN_NAME}.exe")
+            # Ship the bare .exe so Windows users can download and run it directly
+            archive="${BIN_NAME}-${{ matrix.platform }}.exe"
+            cp "$dir/${BIN_NAME}.exe" "$archive"
             sha256sum "$archive" > "${BIN_NAME}-${{ matrix.platform }}.sha256"
           else
             # Only strip on Linux to avoid corrupting macOS code signatures
@@ -61,7 +62,7 @@ jobs:
           name: ${{ matrix.platform }}
           path: |
             ${{ env.BIN_NAME }}-${{ matrix.platform }}.tar.gz
-            ${{ env.BIN_NAME }}-${{ matrix.platform }}.zip
+            ${{ env.BIN_NAME }}-${{ matrix.platform }}.exe
             ${{ env.BIN_NAME }}-${{ matrix.platform }}.sha256
 
   release:
@@ -78,6 +79,6 @@ jobs:
           generate_release_notes: true
           files: |
             *.tar.gz
-            *.zip
+            *.exe
             *.sha256
 

@@ -56,13 +56,26 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
         (key_style, label_style)
     };
 
-    let spans = vec![
-        Span::raw("  "),
-        Span::styled("Enter", action_key),
-        Span::styled(" resume  ", action_label),
-        Span::styled("Esc", key_style),
-        Span::styled(" quit", label_style),
-    ];
+    let spans = if app.is_hide_pending() {
+        let warn_style = Style::default().fg(Color::Rgb(230, 110, 110));
+        vec![
+            Span::raw("  "),
+            Span::styled("Ctrl+D", warn_style.bold()),
+            Span::styled(" again to hide this conversation  ", warn_style),
+            Span::styled("any key", key_style),
+            Span::styled(" cancel", label_style),
+        ]
+    } else {
+        vec![
+            Span::raw("  "),
+            Span::styled("Enter", action_key),
+            Span::styled(" resume  ", action_label),
+            Span::styled("Ctrl+D", action_key),
+            Span::styled(" hide  ", action_label),
+            Span::styled("Esc", key_style),
+            Span::styled(" quit", label_style),
+        ]
+    };
 
     let status_line = Line::from(spans);
     let status = Paragraph::new(status_line).style(Style::default().bg(Color::Rgb(30, 30, 35)));

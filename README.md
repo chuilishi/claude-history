@@ -14,6 +14,7 @@ Run `claude-history` anywhere → fuzzy-search across **all** projects → press
 - **Global history** — searches every Claude Code conversation across all projects
 - **Instant fuzzy search** — case-insensitive, prefix-matching, multi-word AND logic
 - **One-key resume** — press Enter to jump straight back into Claude Code
+- **Hide conversations** — press Ctrl+D twice to hide a conversation from the list (Claude Code's files are untouched; remove its ID from `~/.claude-history/hidden` to restore)
 - **Fast** — parallel loading with rayon, streaming results, precomputed search index
 - **Cross-platform** — works on Windows, macOS, and Linux
 

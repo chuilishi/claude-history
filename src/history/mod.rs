@@ -1,3 +1,4 @@
+pub mod hidden;
 mod loader;
 mod parser;
 mod path;

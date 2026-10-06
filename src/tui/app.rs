@@ -1,5 +1,5 @@
 use crate::error::{AppError, Result};
-use crate::history::{Conversation, LoaderMessage};
+use crate::history::{hidden, Conversation, LoaderMessage};
 use crate::tui::search::{self, SearchableConversation};
 use crate::tui::ui;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
@@ -33,6 +33,8 @@ pub struct App {
     query_words: Vec<String>,
     cursor_pos: usize,
     loading_state: LoadingState,
+    /// Path armed by the first Ctrl+D; a second Ctrl+D on the same item hides it
+    pending_hide: Option<PathBuf>,
 }
 
 impl App {
@@ -46,6 +48,7 @@ impl App {
             query_words: Vec::new(),
             cursor_pos: 0,
             loading_state: LoadingState::Loading { loaded: 0 },
+            pending_hide: None,
         }
     }
 
@@ -186,6 +189,49 @@ impl App {
         &self.query_words
     }
 
+    pub fn is_hide_pending(&self) -> bool {
+        self.pending_hide.is_some()
+    }
+
+    /// Record the selected conversation as hidden, then drop it from the list.
+    /// Claude Code's files are left untouched; the list is only updated if recording succeeds.
+    fn hide_selected(&mut self) {
+        let Some(selected) = self.selected else {
+            return;
+        };
+        let Some(&conv_idx) = self.filtered.get(selected) else {
+            return;
+        };
+        let Some(id) = hidden::session_id(&self.conversations[conv_idx].path) else {
+            return;
+        };
+        if hidden::hide(id).is_err() {
+            return;
+        }
+
+        self.conversations.remove(conv_idx);
+        self.searchable.remove(conv_idx);
+        for (idx, conv) in self.conversations.iter_mut().enumerate() {
+            conv.index = idx;
+        }
+        for (idx, s) in self.searchable.iter_mut().enumerate() {
+            s.index = idx;
+        }
+
+        self.filtered.remove(selected);
+        for idx in self.filtered.iter_mut() {
+            if *idx > conv_idx {
+                *idx -= 1;
+            }
+        }
+
+        self.selected = if self.filtered.is_empty() {
+            None
+        } else {
+            Some(selected.min(self.filtered.len() - 1))
+        };
+    }
+
     pub fn cursor_pos(&self) -> usize {
         self.cursor_pos
     }
@@ -253,6 +299,9 @@ impl App {
             return self.handle_loading_key(code, modifiers);
         }
 
+        // Any key other than a second Ctrl+D cancels a pending hide
+        let armed = self.pending_hide.take();
+
         match code {
             KeyCode::Esc => Some(Action::Quit),
             KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => Some(Action::Quit),
@@ -295,6 +344,15 @@ impl App {
             KeyCode::Char('w') if modifiers.contains(KeyModifiers::CONTROL) => {
                 if self.delete_word_backwards() {
                     self.update_filter();
+                }
+                None
+            }
+            KeyCode::Char('d') if modifiers.contains(KeyModifiers::CONTROL) => {
+                let current = self.get_selected_path();
+                if current.is_some() && armed == current {
+                    self.hide_selected();
+                } else {
+                    self.pending_hide = current;
                 }
                 None
             }

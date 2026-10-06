@@ -1,3 +1,4 @@
+use super::hidden;
 use super::parser::process_conversation_file;
 use super::path::{
     decode_project_dir_name_to_path, format_short_name_from_path,
@@ -5,6 +6,7 @@ use super::path::{
 use super::{Conversation, LoaderMessage, Project};
 use crate::error::{AppError, Result};
 use rayon::prelude::*;
+use std::collections::HashSet;
 use std::fs::read_dir;
 use std::path::Path;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -45,10 +47,12 @@ fn load_all_streaming_inner(tx: Sender<LoaderMessage>) {
         }
     };
 
+    let hidden = hidden::load_hidden();
+
     projects.par_iter().for_each(|project| {
         let project_dir = root.join(&project.name);
 
-        match load_conversations(&project_dir) {
+        match load_conversations(&project_dir, &hidden) {
             Ok(mut convs) => {
                 if convs.is_empty() {
                     return;
@@ -121,7 +125,7 @@ fn list_projects(root: &Path) -> Result<Vec<Project>> {
     Ok(projects)
 }
 
-fn load_conversations(projects_dir: &Path) -> Result<Vec<Conversation>> {
+fn load_conversations(projects_dir: &Path, hidden: &HashSet<String>) -> Result<Vec<Conversation>> {
     let mut files_with_meta = Vec::new();
 
     for entry in read_dir(projects_dir)? {
@@ -132,6 +136,10 @@ fn load_conversations(projects_dir: &Path) -> Result<Vec<Conversation>> {
             if let Some(filename) = path.file_name().and_then(|f| f.to_str())
                 && filename.starts_with("agent-")
             {
+                continue;
+            }
+
+            if hidden::session_id(&path).is_some_and(|id| hidden.contains(id)) {
                 continue;
             }
 

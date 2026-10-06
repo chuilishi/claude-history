@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Added `Ctrl+D` (press twice) to hide a conversation from the list. Hidden
+  session IDs are stored in `~/.claude-history/hidden`; Claude Code's own files
+  are never modified
+
 ## v0.1.25 (2026-02-11)
 
 - Added `--show-id` (`-i`) flag to print the selected conversation's session ID,

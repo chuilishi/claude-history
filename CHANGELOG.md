@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.1.26 (2026-10-06)
 
 - Added `Ctrl+D` (press twice) to hide a conversation from the list. Hidden
   session IDs are stored in `~/.claude-history/hidden`; Claude Code's own files

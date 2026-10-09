@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Resumed conversations are launched with `--allow-dangerously-skip-permissions`,
+  so bypass permissions mode is always available in the `Shift+Tab` cycle
+
 ## v0.1.26 (2026-10-06)
 
 - Added `Ctrl+D` (press twice) to hide a conversation from the list. Hidden

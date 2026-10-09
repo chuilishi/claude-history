@@ -70,7 +70,11 @@ fn resume_with_claude(
     };
 
     let mut command = Command::new("claude");
-    command.args(["--resume", &conversation_id]);
+    command.args([
+        "--resume",
+        &conversation_id,
+        "--allow-dangerously-skip-permissions",
+    ]);
     command.current_dir(project_dir);
 
     run_claude_command(command)

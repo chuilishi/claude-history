@@ -1,5 +1,5 @@
 [package]
-name = "claude-history"
+name = "claude-history-resume"
 version = "0.1.27"
 edition = "2024"
 description = "Fuzzy-search Claude Code conversation history from the terminal."
@@ -9,6 +9,13 @@ repository = "https://github.com/chuilishi/claude-history"
 homepage = "https://github.com/chuilishi/claude-history"
 keywords = ["claude", "claude-code", "fzf", "cli", "history"]
 categories = ["command-line-utilities"]
+exclude = ["meta/", ".github/", "scripts/", ".workmux.yaml", "justfile", "RELEASE.md"]
+
+# The crate name `claude-history` belongs to the upstream project on crates.io;
+# the installed command keeps that name.
+[[bin]]
+name = "claude-history"
+path = "src/main.rs"
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }

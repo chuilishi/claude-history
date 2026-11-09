@@ -22,8 +22,10 @@
 ## 安装
 
 ```sh
-cargo install --git https://github.com/chuilishi/claude-history
+cargo install claude-history-resume
 ```
+
+crate 名为 `claude-history-resume`（`claude-history` 已被上游项目占用），安装后的命令仍是 `claude-history`。也可以从 [Releases 页面](https://github.com/chuilishi/claude-history/releases)下载预编译的二进制。
 
 ## 使用
 

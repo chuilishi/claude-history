@@ -53,7 +53,7 @@ detect_platform() {
 		echo ""
 		echo "claude-history supports macOS and Linux."
 		echo "For other platforms, try building from source with Cargo:"
-		echo "  cargo install claude-history"
+		echo "  cargo install claude-history-resume"
 		echo ""
 		exit 1
 		;;
@@ -71,7 +71,7 @@ detect_platform() {
 		echo ""
 		echo "claude-history prebuilt binaries are available for amd64 and arm64."
 		echo "For other architectures, try building from source with Cargo:"
-		echo "  cargo install claude-history"
+		echo "  cargo install claude-history-resume"
 		echo ""
 		exit 1
 		;;
@@ -134,7 +134,7 @@ install_from_release() {
 			echo ""
 			echo "The release may not have a prebuilt binary for your platform."
 			echo "Try installing with Cargo instead:"
-			echo "  cargo install claude-history"
+			echo "  cargo install claude-history-resume"
 			echo ""
 			cd - >/dev/null || cd "$HOME"
 			exit 1
@@ -145,7 +145,7 @@ install_from_release() {
 			echo ""
 			echo "The release may not have a prebuilt binary for your platform."
 			echo "Try installing with Cargo instead:"
-			echo "  cargo install claude-history"
+			echo "  cargo install claude-history-resume"
 			echo ""
 			cd - >/dev/null || cd "$HOME"
 			exit 1

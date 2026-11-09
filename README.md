@@ -22,8 +22,10 @@ Run `claude-history` anywhere → fuzzy-search across **all** projects → press
 ## Install
 
 ```sh
-cargo install --git https://github.com/chuilishi/claude-history
+cargo install claude-history-resume
 ```
+
+The crate is named `claude-history-resume` (the upstream project owns `claude-history`); the installed command is `claude-history`. Prebuilt binaries are on the [releases page](https://github.com/chuilishi/claude-history/releases).
 
 ## Usage
 

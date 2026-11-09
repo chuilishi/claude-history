@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.1.32 (2026-11-09)
 
 - `show` lists a timeline of the conversation's recaps, the sites it visited
   and the tools it used, so a long conversation shows more than its opening

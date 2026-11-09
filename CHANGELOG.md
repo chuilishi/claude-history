@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.1.33 (2026-11-09)
 
 - Search covers the start of every tool result (command output, fetched
   pages, files read), not just failed ones, and the full transcripts of

@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- `install.ps1` retries each download up to three times, since proxies and
+  GitHub's CDN fail transiently (504)
+
 ## v0.1.30 (2026-11-09)
 
 - `claude-history search <words...>` and `claude-history show <id>` print

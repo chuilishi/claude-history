@@ -27,6 +27,21 @@ function Install-ClaudeHistory {
     function Write-Ok($msg) { Write-Host "==> $msg" -ForegroundColor Green }
     function Write-Warn($msg) { Write-Host "Warning: $msg" -ForegroundColor Yellow }
 
+    # Download with retries; proxies and GitHub's CDN fail transiently (504s)
+    function Get-File($url, $outFile) {
+        $attempts = 3
+        for ($i = 1; $i -le $attempts; $i++) {
+            try {
+                Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $outFile
+                return
+            } catch {
+                if ($i -eq $attempts) { throw }
+                Write-Warn "Download failed ($($_.Exception.Message.Trim())), retrying ($i/$attempts)..."
+                Start-Sleep -Seconds (2 * $i)
+            }
+        }
+    }
+
     # `vX.Y.Z` from `<exe> --version`, or $null. 5.1 turns native stderr
     # output into errors under 'Stop', hence the try.
     function Get-BinaryVersion($path) {
@@ -78,14 +93,14 @@ function Install-ClaudeHistory {
 
         Write-Info "Downloading $assetName..."
         try {
-            Invoke-WebRequest -UseBasicParsing -Uri "$base/$assetName" -OutFile $exe
+            Get-File "$base/$assetName" $exe
         } catch {
             throw "Failed to download $base/$assetName. The release may not have a Windows binary. ($_)"
         }
 
         Write-Info 'Verifying checksum...'
         try {
-            Invoke-WebRequest -UseBasicParsing -Uri "$base/$binName-$platform.sha256" -OutFile $sumFile
+            Get-File "$base/$binName-$platform.sha256" $sumFile
         } catch {
             throw "Failed to download the checksum file. ($_)"
         }

@@ -4,6 +4,10 @@
 
 - Resumed conversations are launched with `--allow-dangerously-skip-permissions`,
   so bypass permissions mode is always available in the `Shift+Tab` cycle
+- Much faster startup: parse results are cached in `~/.claude-history/cache.json`,
+  so unchanged conversations are not read again and growing ones are only
+  parsed from where the last run stopped. Parsing itself also skips tool
+  inputs/outputs without allocating
 
 ## v0.1.26 (2026-10-06)
 

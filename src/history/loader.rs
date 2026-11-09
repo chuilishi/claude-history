@@ -1,14 +1,14 @@
+use super::cache::{self, Entry, Lookup};
 use super::hidden;
-use super::parser::process_conversation_file;
-use super::path::{
-    decode_project_dir_name_to_path, format_short_name_from_path,
-};
+use super::parser::{Progress, process_conversation_file};
+use super::path::{decode_project_dir_name_to_path, format_short_name_from_path};
 use super::{Conversation, LoaderMessage, Project};
 use crate::error::{AppError, Result};
 use rayon::prelude::*;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs::read_dir;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::SystemTime;
@@ -48,11 +48,17 @@ fn load_all_streaming_inner(tx: Sender<LoaderMessage>) {
     };
 
     let hidden = hidden::load_hidden();
+    let old_cache = Mutex::new(cache::load().entries);
+    let new_cache = Mutex::new(HashMap::new());
+    let caches = Caches {
+        old: &old_cache,
+        new: &new_cache,
+    };
 
     projects.par_iter().for_each(|project| {
         let project_dir = root.join(&project.name);
 
-        match load_conversations(&project_dir, &hidden) {
+        match load_conversations(&project_dir, &hidden, &caches) {
             Ok(mut convs) => {
                 if convs.is_empty() {
                     return;
@@ -74,7 +80,52 @@ fn load_all_streaming_inner(tx: Sender<LoaderMessage>) {
         }
     });
 
+    // Saved before `Done` so it is written even if the app exits right after
+    cache::save(new_cache.into_inner().unwrap_or_default());
+
     let _ = tx.send(LoaderMessage::Done);
+}
+
+struct Caches<'a> {
+    /// Entries from the last run; taken out as files are looked up
+    old: &'a Mutex<HashMap<PathBuf, Entry>>,
+    /// Entries for this run's files, saved at the end
+    new: &'a Mutex<HashMap<PathBuf, Entry>>,
+}
+
+fn load_cached(
+    path: PathBuf,
+    size: u64,
+    modified: Option<std::time::SystemTime>,
+    caches: &Caches,
+) -> Option<Conversation> {
+    let mtime_ns = cache::mtime_ns(modified);
+    let cached = caches.old.lock().ok()?.remove(&path);
+
+    let (conv, progress) = match cache::lookup(cached, size, mtime_ns) {
+        Lookup::Unchanged(progress) => (progress.state.finish(path.clone(), modified), progress),
+        Lookup::Resume(mut progress) => {
+            let conv = process_conversation_file(path.clone(), modified, &mut progress).ok()?;
+            (conv, progress)
+        }
+        Lookup::Fresh => {
+            let mut progress = Progress::default();
+            let conv = process_conversation_file(path.clone(), modified, &mut progress).ok()?;
+            (conv, progress)
+        }
+    };
+
+    if let Ok(mut new) = caches.new.lock() {
+        new.insert(
+            path,
+            Entry {
+                size,
+                mtime_ns,
+                progress,
+            },
+        );
+    }
+    conv
 }
 
 fn list_projects(root: &Path) -> Result<Vec<Project>> {
@@ -113,10 +164,7 @@ fn list_projects(root: &Path) -> Result<Vec<Project>> {
                 .ok()
                 .unwrap_or(SystemTime::UNIX_EPOCH);
 
-            Some(Project {
-                name,
-                modified,
-            })
+            Some(Project { name, modified })
         })
         .collect();
 
@@ -125,7 +173,11 @@ fn list_projects(root: &Path) -> Result<Vec<Project>> {
     Ok(projects)
 }
 
-fn load_conversations(projects_dir: &Path, hidden: &HashSet<String>) -> Result<Vec<Conversation>> {
+fn load_conversations(
+    projects_dir: &Path,
+    hidden: &HashSet<String>,
+    caches: &Caches,
+) -> Result<Vec<Conversation>> {
     let mut files_with_meta = Vec::new();
 
     for entry in read_dir(projects_dir)? {
@@ -143,26 +195,17 @@ fn load_conversations(projects_dir: &Path, hidden: &HashSet<String>) -> Result<V
                 continue;
             }
 
-            let modified = entry
-                .metadata()
-                .ok()
-                .and_then(|metadata| metadata.modified().ok());
+            let metadata = entry.metadata().ok();
+            let modified = metadata.as_ref().and_then(|m| m.modified().ok());
+            let size = metadata.map(|m| m.len()).unwrap_or(0);
 
-            files_with_meta.push((path, modified));
+            files_with_meta.push((path, size, modified));
         }
     }
 
-    files_with_meta.sort_by_key(|(_, modified)| modified.unwrap_or(SystemTime::UNIX_EPOCH));
-    files_with_meta.reverse();
-
     let mut conversations: Vec<Conversation> = files_with_meta
         .into_par_iter()
-        .filter_map(|(path, modified)| {
-            match process_conversation_file(path, modified) {
-                Ok(Some(conversation)) => Some(conversation),
-                _ => None,
-            }
-        })
+        .filter_map(|(path, size, modified)| load_cached(path, size, modified, caches))
         .collect();
 
     conversations.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));

@@ -1,3 +1,4 @@
+mod cache;
 pub mod hidden;
 mod loader;
 mod parser;

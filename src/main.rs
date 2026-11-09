@@ -1,22 +1,23 @@
 mod claude;
-mod cli;
 mod error;
 mod history;
+mod search;
 mod tui;
 
 use clap::Parser;
-use cli::Args;
 use error::{AppError, Result};
-use std::path::Path;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+
+/// Takes no arguments; parsing still provides `--help` and rejects typos.
+#[derive(Parser)]
+#[command(name = "claude-history", about = "Resume Claude conversations")]
+struct Args;
 
 fn main() {
     if let Err(e) = run() {
         match e {
-            AppError::SelectionCancelled => {
-                std::process::exit(0);
-            }
+            AppError::SelectionCancelled => std::process::exit(0),
             _ => {
                 eprintln!("Error: {}", e);
                 std::process::exit(1);
@@ -26,58 +27,51 @@ fn main() {
 }
 
 fn run() -> Result<()> {
-    let _args = Args::parse();
+    Args::parse();
 
     let rx = history::load_all_conversations_streaming();
-
     match tui::run_with_loader(rx)? {
-        (tui::Action::Resume(path), convs) => {
-            let conv = convs.iter().find(|c| c.path == path);
-            let project_path = conv.and_then(|c| c.project_path.as_ref());
-            resume_with_claude(&path, project_path)?;
-        }
-        (tui::Action::Quit, _) => return Err(AppError::SelectionCancelled),
+        tui::Action::Resume {
+            session_id,
+            project_path,
+        } => resume_with_claude(&session_id, &project_path),
+        tui::Action::Quit => Err(AppError::SelectionCancelled),
     }
-
-    Ok(())
 }
 
-fn resume_with_claude(
-    selected_path: &Path,
-    project_path: Option<&PathBuf>,
-) -> Result<()> {
-    let conversation_id = selected_path
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .ok_or_else(|| {
-            AppError::ClaudeExecutionError("Conversation filename is not valid Unicode".to_string())
-        })?
-        .to_owned();
+fn resume_with_claude(session_id: &str, project_dir: &Path) -> Result<()> {
+    if !project_dir.is_dir() {
+        return Err(AppError::ClaudeExecutionError(format!(
+            "Project directory no longer exists: {}",
+            project_dir.display()
+        )));
+    }
 
-    let project_dir = match project_path {
-        Some(path) if path.exists() && path.is_dir() => path,
-        Some(path) => {
-            return Err(AppError::ClaudeExecutionError(format!(
-                "Project directory no longer exists: {}",
-                path.display()
-            )));
-        }
-        None => {
-            return Err(AppError::ClaudeExecutionError(
-                "Cannot determine project directory for this conversation".to_string(),
-            ));
-        }
-    };
-
-    let mut command = Command::new("claude");
+    let mut command = Command::new(claude_program());
     command.args([
         "--resume",
-        &conversation_id,
+        session_id,
         "--allow-dangerously-skip-permissions",
     ]);
     command.current_dir(project_dir);
 
     run_claude_command(command)
+}
+
+#[cfg(not(windows))]
+fn claude_program() -> PathBuf {
+    PathBuf::from("claude")
+}
+
+/// `Command` only finds `.exe` files on PATH, but npm installs `claude.cmd`.
+/// Look for both (exe first); fall back to the bare name for a clear error.
+#[cfg(windows)]
+fn claude_program() -> PathBuf {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    std::env::split_paths(&path)
+        .flat_map(|dir| ["claude.exe", "claude.cmd", "claude.bat"].map(|name| dir.join(name)))
+        .find(|candidate| candidate.is_file())
+        .unwrap_or_else(|| PathBuf::from("claude"))
 }
 
 #[cfg(unix)]

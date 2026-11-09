@@ -8,7 +8,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 fn hidden_file_path() -> Option<PathBuf> {
-    Some(home::home_dir()?.join(".claude-history").join("hidden"))
+    Some(super::data_dir()?.join("hidden"))
 }
 
 /// Session ID of a conversation file (`<session-id>.jsonl`)

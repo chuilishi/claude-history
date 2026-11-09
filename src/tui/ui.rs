@@ -1,11 +1,28 @@
+use crate::search::{can_start_match, fold};
 use crate::tui::app::{App, LoadingState};
-use crate::tui::search::is_word_separator;
 use ratatui::layout::Position;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, Paragraph};
+use std::borrow::Cow;
 
 /// Lines per conversation item (header + preview + separator)
 pub const LINES_PER_ITEM: usize = 3;
+
+const ACCENT: Color = Color::Rgb(78, 201, 176);
+const BORDER: Color = Color::Rgb(60, 60, 60);
+const LABEL: Color = Color::Rgb(100, 100, 100);
+const SEPARATOR: Color = Color::Rgb(70, 70, 70);
+
+/// Search prompt; the query is drawn right after it
+const PROMPT: &str = " ❯ ";
+
+/// Index of the first item on the page that holds `selected`
+pub fn page_offset(selected: Option<usize>, items_per_page: usize) -> usize {
+    match (selected, items_per_page) {
+        (Some(sel), n) if n > 0 => sel / n * n,
+        _ => 0,
+    }
+}
 
 /// Render the TUI
 pub fn render(frame: &mut Frame, app: &App) {
@@ -14,44 +31,31 @@ pub fn render(frame: &mut Frame, app: &App) {
     let outer_block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Color::Rgb(60, 60, 60)));
+        .border_style(Style::default().fg(BORDER));
     let inner_area = outer_block.inner(area);
     frame.render_widget(outer_block, area);
 
-    if inner_area.height < 4 {
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Length(2), Constraint::Min(1)])
-            .split(inner_area);
-        render_search_bar(frame, app, chunks[0]);
-        render_list(frame, app, chunks[1]);
-        return;
+    let show_status_bar = inner_area.height >= 4;
+    let mut constraints = vec![Constraint::Length(2), Constraint::Min(1)];
+    if show_status_bar {
+        constraints.push(Constraint::Length(1));
     }
-
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(2),
-            Constraint::Min(1),
-            Constraint::Length(1),
-        ])
-        .split(inner_area);
+    let chunks = Layout::vertical(constraints).split(inner_area);
 
     render_search_bar(frame, app, chunks[0]);
     render_list(frame, app, chunks[1]);
-    render_status_bar(frame, app, chunks[2]);
+    if show_status_bar {
+        render_status_bar(frame, app, chunks[2]);
+    }
 }
 
 fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
-    let is_loading = app.is_loading();
+    let key_style = Style::default().fg(ACCENT);
+    let label_style = Style::default().fg(LABEL);
+    let dim_style = Style::default().fg(BORDER);
 
-    let key_style = Style::default().fg(Color::Rgb(78, 201, 176));
-    let label_style = Style::default().fg(Color::Rgb(100, 100, 100));
-    let dim_key_style = Style::default().fg(Color::Rgb(60, 60, 60));
-    let dim_label_style = Style::default().fg(Color::Rgb(60, 60, 60));
-
-    let (action_key, action_label) = if is_loading {
-        (dim_key_style, dim_label_style)
+    let (action_key, action_label) = if app.is_loading() {
+        (dim_style, dim_style)
     } else {
         (key_style, label_style)
     };
@@ -92,24 +96,17 @@ fn render_search_bar(frame: &mut Frame, app: &App, area: Rect) {
         }
     };
 
-    let prompt = " ❯ ";
     let query = app.query();
-    let left_len = prompt.chars().count() + query.chars().count();
+    let prompt_len = PROMPT.chars().count();
+    let left_len = prompt_len + query.chars().count();
     let count_len = status_text.chars().count() + 1;
     let padding = (area.width as usize).saturating_sub(left_len + count_len + 1);
 
-    let prompt_style = Style::default().fg(Color::Rgb(78, 201, 176));
-
-    let status_style = if app.is_loading() {
-        Style::default().fg(Color::Rgb(78, 201, 176))
-    } else {
-        Style::default().fg(Color::Rgb(100, 100, 100))
-    };
+    let status_style = Style::default().fg(if app.is_loading() { ACCENT } else { LABEL });
 
     let search_line = Line::from(vec![
-        Span::raw(" "),
-        Span::styled("❯ ", prompt_style),
-        Span::raw(query.to_string()),
+        Span::styled(PROMPT, Style::default().fg(ACCENT)),
+        Span::raw(query),
         Span::raw(" ".repeat(padding)),
         Span::styled(status_text, status_style),
         Span::raw(" "),
@@ -118,15 +115,17 @@ fn render_search_bar(frame: &mut Frame, app: &App, area: Rect) {
     let input = Paragraph::new(search_line).block(
         Block::default()
             .borders(Borders::BOTTOM)
-            .border_style(Style::default().fg(Color::Rgb(60, 60, 60))),
+            .border_style(Style::default().fg(BORDER)),
     );
 
     frame.render_widget(input, area);
 
-    if area.width > 3 {
+    if area.width as usize > prompt_len {
         let cursor_offset = app.cursor_pos() as u16;
         let max_x = area.x + area.width.saturating_sub(2);
-        let cursor_x = (area.x + 3).saturating_add(cursor_offset).min(max_x);
+        let cursor_x = (area.x + prompt_len as u16)
+            .saturating_add(cursor_offset)
+            .min(max_x);
         frame.set_cursor_position(Position::new(cursor_x, area.y));
     }
 }
@@ -134,13 +133,10 @@ fn render_search_bar(frame: &mut Frame, app: &App, area: Rect) {
 fn render_list(frame: &mut Frame, app: &App, area: Rect) {
     app.set_list_area(area);
     let width = area.width as usize;
-    let query_words: Vec<&str> = app.query_words().iter().map(|s| s.as_str()).collect();
+    let query_words = app.query_words();
 
     let items_per_page = (area.height as usize) / LINES_PER_ITEM;
-    let offset = match (app.selected(), items_per_page) {
-        (Some(sel), n) if n > 0 => (sel / n) * n,
-        _ => 0,
-    };
+    let offset = page_offset(app.selected(), items_per_page);
     let visible_count = items_per_page.max(1);
 
     let separator_str = "─".repeat(width);
@@ -173,17 +169,9 @@ fn render_list(frame: &mut Frame, app: &App, area: Rect) {
             });
 
             let indicator = " ▌ ";
-            let indicator_style = if is_selected {
-                Style::default().fg(Color::Rgb(78, 201, 176))
-            } else {
-                Style::default().fg(Color::Rgb(60, 60, 60))
-            };
+            let indicator_style = Style::default().fg(if is_selected { ACCENT } else { BORDER });
 
-            let project_part = conv
-                .project_name
-                .as_ref()
-                .map(|name| name.to_string())
-                .unwrap_or_default();
+            let project_part = conv.project_name.as_str();
 
             let duration_len = duration
                 .as_ref()
@@ -202,19 +190,7 @@ fn render_list(frame: &mut Frame, app: &App, area: Rect) {
                 .summary
                 .as_ref()
                 .filter(|s| !s.is_empty() && available_for_summary > 5)
-                .map(|s| {
-                    let summary_chars = s.chars().count();
-                    if summary_chars > available_for_summary {
-                        format!(
-                            " · {}…",
-                            s.chars()
-                                .take(available_for_summary.saturating_sub(1))
-                                .collect::<String>()
-                        )
-                    } else {
-                        format!(" · {}", s)
-                    }
-                });
+                .map(|s| format!(" · {}", truncate(s, available_for_summary)));
 
             let left_len = indicator_len
                 + project_len
@@ -234,9 +210,9 @@ fn render_list(frame: &mut Frame, app: &App, area: Rect) {
             let summary_highlight_style = Style::default().fg(Color::Rgb(180, 195, 215));
 
             let highlight_style = if is_selected {
-                Style::default().fg(Color::Rgb(78, 201, 176)).bold()
+                Style::default().fg(ACCENT).bold()
             } else {
-                Style::default().fg(Color::Rgb(78, 201, 176))
+                Style::default().fg(ACCENT)
             };
 
             let selection_bg = if is_selected {
@@ -247,8 +223,8 @@ fn render_list(frame: &mut Frame, app: &App, area: Rect) {
 
             let mut header_spans = vec![Span::styled(indicator, indicator_style)];
             header_spans.extend(highlight_text(
-                &project_part,
-                &query_words,
+                project_part,
+                query_words,
                 project_style,
                 highlight_style,
             ));
@@ -256,7 +232,7 @@ fn render_list(frame: &mut Frame, app: &App, area: Rect) {
             if let Some(ref summary) = summary_part {
                 header_spans.extend(highlight_text(
                     summary,
-                    &query_words,
+                    query_words,
                     summary_style,
                     summary_highlight_style,
                 ));
@@ -268,19 +244,13 @@ fn render_list(frame: &mut Frame, app: &App, area: Rect) {
                 Style::default().fg(Color::Rgb(110, 110, 110)),
             ));
             if let Some(ref d) = duration {
-                header_spans.push(Span::styled(
-                    " · ",
-                    Style::default().fg(Color::Rgb(70, 70, 70)),
-                ));
+                header_spans.push(Span::styled(" · ", Style::default().fg(SEPARATOR)));
                 header_spans.push(Span::styled(
                     d.clone(),
                     Style::default().fg(Color::Rgb(100, 140, 130)),
                 ));
             }
-            header_spans.push(Span::styled(
-                " · ",
-                Style::default().fg(Color::Rgb(70, 70, 70)),
-            ));
+            header_spans.push(Span::styled(" · ", Style::default().fg(SEPARATOR)));
             header_spans.push(Span::styled(
                 timestamp,
                 Style::default().fg(Color::Rgb(140, 140, 140)),
@@ -289,22 +259,12 @@ fn render_list(frame: &mut Frame, app: &App, area: Rect) {
             let header = Line::from(header_spans).style(selection_bg);
 
             // Preview line
-            let preview_text = sanitize_preview(&conv.preview);
-            let max_preview_len = width.saturating_sub(4);
-            let truncated_preview = if preview_text.chars().count() > max_preview_len {
-                let truncated: String = preview_text
-                    .chars()
-                    .take(max_preview_len.saturating_sub(1))
-                    .collect();
-                format!("{}…", truncated)
-            } else {
-                preview_text
-            };
+            let truncated_preview = truncate(&conv.preview, width.saturating_sub(4));
             let preview_style = Style::default().fg(Color::Rgb(130, 130, 130));
             let mut preview_spans = vec![Span::styled(indicator, indicator_style)];
             preview_spans.extend(highlight_text(
                 &truncated_preview,
-                &query_words,
+                query_words,
                 preview_style,
                 Style::default().fg(Color::Rgb(180, 180, 180)),
             ));
@@ -326,7 +286,7 @@ fn render_list(frame: &mut Frame, app: &App, area: Rect) {
 /// Split text into spans with matched portions highlighted (case-insensitive)
 fn highlight_text(
     text: &str,
-    query_words: &[&str],
+    query_words: &[String],
     base_style: Style,
     highlight_style: Style,
 ) -> Vec<Span<'static>> {
@@ -335,6 +295,14 @@ fn highlight_text(
     }
 
     let chars: Vec<char> = text.chars().collect();
+    // `fold` maps one char to one char, so indices line up with `chars`
+    let folded: Vec<char> = chars.iter().copied().map(fold).collect();
+    let mut queries: Vec<Vec<char>> = query_words
+        .iter()
+        .map(|qw| qw.chars().collect::<Vec<_>>())
+        .collect();
+    // Prefer the longest query word when several match at one position
+    queries.sort_by_key(|qw| std::cmp::Reverse(qw.len()));
 
     let char_to_byte: Vec<usize> = text
         .char_indices()
@@ -347,56 +315,29 @@ fn highlight_text(
     let mut char_idx = 0;
 
     while char_idx < chars.len() {
-        let at_word_start = if char_idx == 0 {
-            !is_word_separator(chars[char_idx])
-        } else {
-            is_word_separator(chars[char_idx - 1]) && !is_word_separator(chars[char_idx])
+        let prev = char_idx.checked_sub(1).map(|i| chars[i]);
+        let matched = queries
+            .iter()
+            .find(|qw| folded[char_idx..].starts_with(qw) && can_start_match(prev, qw[0]));
+
+        let Some(qw) = matched else {
+            char_idx += 1;
+            continue;
         };
 
-        if at_word_start {
-            let word_start = char_idx;
-            let mut word_end = char_idx;
-            while word_end < chars.len() && !is_word_separator(chars[word_end]) {
-                word_end += 1;
-            }
-
-            let start_byte = char_to_byte[word_start];
-            let end_byte = char_to_byte[word_end];
-            let original_word = &text[start_byte..end_byte];
-            let word_lower = original_word.to_lowercase();
-
-            let matched_query = query_words.iter().find(|&&qw| word_lower.starts_with(qw));
-
-            if let Some(qw) = matched_query {
-                if word_start > last_end {
-                    let prev_start_byte = char_to_byte[last_end];
-                    spans.push(Span::styled(
-                        text[prev_start_byte..start_byte].to_string(),
-                        base_style,
-                    ));
-                }
-
-                let prefix_len = qw.chars().count();
-                let highlight_end = (word_start + prefix_len).min(word_end);
-                let highlight_end_byte = char_to_byte[highlight_end];
-                spans.push(Span::styled(
-                    text[start_byte..highlight_end_byte].to_string(),
-                    highlight_style,
-                ));
-
-                if highlight_end < word_end {
-                    spans.push(Span::styled(
-                        text[highlight_end_byte..end_byte].to_string(),
-                        base_style,
-                    ));
-                }
-
-                last_end = word_end;
-            }
-            char_idx = word_end;
-        } else {
-            char_idx += 1;
+        let end = char_idx + qw.len();
+        if char_idx > last_end {
+            spans.push(Span::styled(
+                text[char_to_byte[last_end]..char_to_byte[char_idx]].to_string(),
+                base_style,
+            ));
         }
+        spans.push(Span::styled(
+            text[char_to_byte[char_idx]..char_to_byte[end]].to_string(),
+            highlight_style,
+        ));
+        last_end = end;
+        char_idx = end;
     }
 
     if last_end < chars.len() {
@@ -411,17 +352,12 @@ fn highlight_text(
     }
 }
 
-/// Remove XML-like tags from preview text
-fn sanitize_preview(text: &str) -> String {
-    let mut result = String::with_capacity(text.len());
-    let mut in_tag = false;
-    for c in text.chars() {
-        match c {
-            '<' => in_tag = true,
-            '>' => in_tag = false,
-            _ if !in_tag => result.push(c),
-            _ => {}
-        }
+/// Shorten `s` to at most `max` chars, ending with `…` when cut
+fn truncate(s: &str, max: usize) -> Cow<'_, str> {
+    if s.chars().count() <= max {
+        return Cow::Borrowed(s);
     }
-    result.split_whitespace().collect::<Vec<_>>().join(" ")
+    let mut cut: String = s.chars().take(max.saturating_sub(1)).collect();
+    cut.push('…');
+    Cow::Owned(cut)
 }

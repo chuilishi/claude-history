@@ -7,35 +7,33 @@ mod path;
 use crate::error::{AppError, Result};
 use chrono::{DateTime, Local};
 use std::path::PathBuf;
-use std::time::SystemTime;
 
 pub use loader::load_all_conversations_streaming;
 
 #[derive(Clone)]
 pub struct Conversation {
     pub path: PathBuf,
-    pub index: usize,
     pub timestamp: DateTime<Local>,
+    /// Display text of the first few messages, tags stripped
     pub preview: String,
-    pub full_text: String,
-    pub project_name: Option<String>,
-    pub project_path: Option<PathBuf>,
-    pub cwd: Option<PathBuf>,
+    /// Folded summary and message text, matched by search
+    pub search_text: String,
+    pub project_name: String,
+    pub project_path: PathBuf,
     pub message_count: usize,
     pub summary: Option<String>,
     pub duration_minutes: Option<u64>,
 }
 
-pub struct Project {
-    pub name: String,
-    pub modified: SystemTime,
-}
-
 pub enum LoaderMessage {
     Fatal(AppError),
-    ProjectError,
     Batch(Vec<Conversation>),
     Done,
+}
+
+/// This tool's own data directory, `~/.claude-history`
+fn data_dir() -> Option<PathBuf> {
+    Some(home::home_dir()?.join(".claude-history"))
 }
 
 pub fn get_claude_projects_root() -> Result<PathBuf> {

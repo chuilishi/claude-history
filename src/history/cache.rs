@@ -1,10 +1,11 @@
-//! On-disk parse cache in `~/.claude-history/cache.json`.
+//! On-disk parse cache in `~/.claude-history/cache.bin` (postcard).
 //!
 //! For every conversation file it records the size and mtime it had and how
 //! far parsing got. On the next start an unchanged file is not opened at all,
 //! and a file that only grew (Claude Code appends to its logs) is parsed from
 //! the recorded offset. Anything else is parsed from scratch. A missing or
-//! unreadable cache just means everything is parsed again.
+//! unreadable cache just means everything is parsed again. The cache is only
+//! rewritten when something changed.
 
 use super::parser::Progress;
 use serde::{Deserialize, Serialize};
@@ -14,7 +15,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Bump when the parser or the cached data changes meaning.
-const VERSION: u32 = 1;
+const VERSION: u32 = 3;
 
 #[derive(Serialize, Deserialize)]
 pub struct Entry {
@@ -30,7 +31,7 @@ pub struct Cache {
 }
 
 fn cache_path() -> Option<PathBuf> {
-    Some(home::home_dir()?.join(".claude-history").join("cache.json"))
+    Some(super::data_dir()?.join("cache.bin"))
 }
 
 pub fn mtime_ns(time: Option<SystemTime>) -> u64 {
@@ -43,7 +44,7 @@ pub fn load() -> Cache {
     let Some(bytes) = cache_path().and_then(|p| fs::read(p).ok()) else {
         return Cache::default();
     };
-    match serde_json::from_slice::<Cache>(&bytes) {
+    match postcard::from_bytes::<Cache>(&bytes) {
         Ok(cache) if cache.version == VERSION => cache,
         _ => Cache::default(),
     }
@@ -58,14 +59,18 @@ pub fn save(entries: HashMap<PathBuf, Entry>) {
         entries,
     };
     let _ = write_atomic(&path, &cache);
+    // JSON cache from versions before 0.1.27
+    if let Some(dir) = super::data_dir() {
+        let _ = fs::remove_file(dir.join("cache.json"));
+    }
 }
 
 fn write_atomic(path: &Path, cache: &Cache) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let tmp = path.with_extension(format!("json.{}.tmp", std::process::id()));
-    let bytes = serde_json::to_vec(cache).map_err(std::io::Error::other)?;
+    let tmp = path.with_extension(format!("bin.{}.tmp", std::process::id()));
+    let bytes = postcard::to_stdvec(cache).map_err(std::io::Error::other)?;
     fs::write(&tmp, bytes)?;
     fs::rename(&tmp, path).inspect_err(|_| {
         let _ = fs::remove_file(&tmp);

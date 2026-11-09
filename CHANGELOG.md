@@ -4,10 +4,23 @@
 
 - Resumed conversations are launched with `--allow-dangerously-skip-permissions`,
   so bypass permissions mode is always available in the `Shift+Tab` cycle
-- Much faster startup: parse results are cached in `~/.claude-history/cache.json`,
+- Much faster startup: parse results are cached in `~/.claude-history/cache.bin`,
   so unchanged conversations are not read again and growing ones are only
-  parsed from where the last run stopped. Parsing itself also skips tool
+  parsed from where the last run stopped. The cache is only rewritten when
+  something changed, and a log file that was rewritten rather than appended to
+  is detected and parsed from scratch. Parsing itself also skips tool
   inputs/outputs without allocating
+- Search works for Chinese/Japanese/Korean text: a CJK query word matches
+  anywhere, and a word right after CJK text or punctuation counts as a word
+  start (e.g. `cache` now matches `src/history/cache.rs`). Highlighting
+  follows the same rules
+- Conversations are sorted by the time of their last message instead of the
+  file's modification time, which changes when files are copied or synced
+- Windows: `claude` installed via npm (`claude.cmd`) is now found on `PATH`
+- Git worktree names (`project/worktree`) are shown on Windows too
+- User messages that merely mention tags like `<command-args>` are no longer
+  dropped; only slash-command wrappers and their output are skipped
+- The screen is only redrawn when something changes
 
 ## v0.1.26 (2026-10-06)
 

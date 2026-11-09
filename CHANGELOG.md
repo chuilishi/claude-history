@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- Search covers the start of every tool result (command output, fetched
+  pages, files read), not just failed ones, and the full transcripts of
+  subagents, which count toward their parent conversation. Boilerplate
+  results (file edits, tool lookups) are left out. All of it ranks in the
+  lowest tier, so the TUI order barely changes
+- The cache roughly doubles (about 55 MB for 4.5 GB of logs) and a full
+  rebuild takes a few seconds longer
+
 ## v0.1.32 (2026-11-09)
 
 - `show` lists a timeline of the conversation's recaps, the sites it visited

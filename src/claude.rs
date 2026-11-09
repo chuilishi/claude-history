@@ -78,6 +78,9 @@ pub struct Message {
 
 /// Characters kept of each tool input field and of each failed tool result
 pub const TOOL_FIELD_CHARS: usize = 300;
+/// Characters kept of each tool result (command output, fetched pages, file
+/// reads, ...): enough to find it by, not the whole payload
+pub const TOOL_OUTPUT_CHARS: usize = 500;
 /// Characters kept of results worth more (subagent reports)
 pub const TOOL_RESULT_CHARS: usize = 2000;
 /// Characters kept of a plan file
@@ -241,7 +244,6 @@ pub struct ToolUse {
 pub struct ToolResult {
     pub tool_use_id: String,
     pub text: String,
-    pub is_error: bool,
 }
 
 /// Extracted from `message.content`, which is either a plain string or an
@@ -329,7 +331,6 @@ impl<'de> Visitor<'de> for BlockVisitor {
         let mut name = String::new();
         let mut fields = String::new();
         let mut result = String::new();
-        let mut is_error = false;
         while let Some(key) = map.next_key::<Cow<'de, str>>()? {
             match key.as_ref() {
                 "type" => kind = Some(map.next_value()?),
@@ -338,7 +339,6 @@ impl<'de> Visitor<'de> for BlockVisitor {
                 "name" => name = map.next_value::<LenientText>()?.0.unwrap_or_default(),
                 "input" => fields = map.next_value::<ToolInput>()?.0,
                 "content" => result = map.next_value::<Capped<TOOL_RESULT_CHARS>>()?.0,
-                "is_error" => is_error = map.next_value::<Option<bool>>()? == Some(true),
                 _ => {
                     map.next_value::<IgnoredAny>()?;
                 }
@@ -350,7 +350,6 @@ impl<'de> Visitor<'de> for BlockVisitor {
             Some("tool_result") => Block::ToolResult(ToolResult {
                 tool_use_id: id,
                 text: result,
-                is_error,
             }),
             _ => Block::Other,
         })

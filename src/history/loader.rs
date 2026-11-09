@@ -1,6 +1,6 @@
 use super::cache::{self, Entry, Lookup};
 use super::hidden;
-use super::parser::{Progress, process_conversation_file};
+use super::parser::{ParseState, Progress, parse_file};
 use super::path::decode_project_dir_name_to_path;
 use super::{Conversation, LoaderMessage};
 use crate::error::{AppError, Result};
@@ -114,38 +114,78 @@ fn load_conversations(
     Ok(files
         .into_par_iter()
         .filter_map(|(path, size, modified)| {
-            load_cached(path, size, modified, &fallback_dir, caches)
+            let mut conv = with_cached_state(&path, size, modified, caches, |state| {
+                state.finish(path.clone(), modified, &fallback_dir)
+            })??;
+            add_subagents(&mut conv, caches);
+            Some(conv)
         })
         .collect())
 }
 
-fn load_cached(
-    path: PathBuf,
+/// Subagent transcripts live in `<session-id>/subagents/agent-*.jsonl`.
+/// Their text joins the end of the parent's search text, which is its tool
+/// tier, and their tools join its tool list.
+fn add_subagents(conv: &mut Conversation, caches: &Caches) {
+    let Ok(entries) = read_dir(conv.path.with_extension("").join("subagents")) else {
+        return;
+    };
+    let mut files: Vec<_> = entries
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            let path = entry.path();
+            let is_transcript = path.extension().is_some_and(|ext| ext == "jsonl");
+            let metadata = entry.metadata().ok()?;
+            is_transcript.then(|| (path, metadata.len(), metadata.modified().ok()))
+        })
+        .collect();
+    // Same order every run, so the search text is stable
+    files.sort();
+    for (path, size, modified) in files {
+        let Some((text, tools)) = with_cached_state(&path, size, modified, caches, |state| {
+            let (text, tools) = state.subagent_text();
+            (text, tools.to_vec())
+        }) else {
+            continue;
+        };
+        if !text.is_empty() {
+            if !conv.search_text.is_empty() {
+                conv.search_text.push(' ');
+            }
+            conv.search_text.push_str(&text);
+        }
+        for tool in tools {
+            if !conv.tools.contains(&tool) {
+                conv.tools.push(tool);
+            }
+        }
+    }
+}
+
+/// Run `f` on the parse state of a log file, parsing only what the cache
+/// does not already cover, and record the new state in the cache.
+fn with_cached_state<T>(
+    path: &Path,
     size: u64,
     modified: Option<SystemTime>,
-    fallback_dir: &Path,
     caches: &Caches,
-) -> Option<Conversation> {
+    f: impl FnOnce(&ParseState) -> T,
+) -> Option<T> {
     let mtime_ns = cache::mtime_ns(modified);
-    let cached = caches.old.lock().ok()?.remove(&path);
+    let cached = caches.old.lock().ok()?.remove(path);
     let before = cached
         .as_ref()
         .map(|e| (e.size, e.mtime_ns, e.progress.offset));
 
-    let (conv, progress) = match cache::lookup(cached, size, mtime_ns) {
-        Lookup::Unchanged(progress) => (
-            progress.state.finish(path.clone(), modified, fallback_dir),
-            progress,
-        ),
+    let (result, progress) = match cache::lookup(cached, size, mtime_ns) {
+        Lookup::Unchanged(progress) => (f(&progress.state), progress),
         lookup => {
             let mut progress = match lookup {
                 Lookup::Resume(progress) => progress,
                 _ => Progress::default(),
             };
-            let conv =
-                process_conversation_file(path.clone(), modified, fallback_dir, &mut progress)
-                    .ok()?;
-            (conv, progress)
+            let result = f(parse_file(path, &mut progress).ok()?.as_ref());
+            (result, progress)
         }
     };
 
@@ -156,7 +196,7 @@ fn load_cached(
     }
     if let Ok(mut new) = caches.new.lock() {
         new.insert(
-            path,
+            path.to_path_buf(),
             Entry {
                 size,
                 mtime_ns,
@@ -164,5 +204,5 @@ fn load_cached(
             },
         );
     }
-    conv
+    Some(result)
 }

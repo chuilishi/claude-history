@@ -1,7 +1,7 @@
 use super::Conversation;
 use super::path::format_short_name_from_path;
 use crate::claude::{
-    Answers, Attachment, Content, LogEntry, Message, TOOL_FIELD_CHARS, ToolResult, capped,
+    Answers, Attachment, Content, LogEntry, Message, TOOL_OUTPUT_CHARS, ToolResult, capped,
 };
 use crate::error::Result;
 use crate::search::push_folded;
@@ -42,6 +42,23 @@ const PERMISSION_MODES: [&str; 6] = [
     "plan",
 ];
 
+/// Tools whose result is a subagent's report, kept at more length
+const SUBAGENT_TOOLS: [&str; 2] = ["Agent", "Task"];
+
+/// Tools whose results are boilerplate ("file updated successfully") or a
+/// dump of tool definitions; what they acted on is already in their input
+const QUIET_TOOLS: [&str; 6] = [
+    "Edit",
+    "MultiEdit",
+    "Write",
+    "NotebookEdit",
+    "TodoWrite",
+    "ToolSearch",
+];
+
+/// Tool calls remembered while waiting for their results
+const MAX_PENDING_CALLS: usize = 64;
+
 /// Start of a background task or subagent report delivered as a user message
 const TASK_NOTIFICATION: &str = "<task-notification>";
 
@@ -73,8 +90,9 @@ pub struct ParseState {
     /// Folded tool inputs, failed tool results, subagent reports, background
     /// task notifications and plans
     tool_text: String,
-    /// Ids of `Agent` tool calls, whose results (subagent reports) are kept
-    agent_call_ids: Vec<String>,
+    /// Tool calls (id, tool name) whose results have not arrived yet; the
+    /// name decides how much of the result is kept
+    pending_calls: Vec<(String, String)>,
     /// Display text of the first few messages
     preview: String,
     preview_parts: u8,
@@ -153,18 +171,21 @@ impl ParseState {
         }
     }
 
-    /// Keep subagent reports, and the start of failed tool results.
+    /// Keep subagent reports, and the start of every other tool result
+    /// except boilerplate ones.
     fn add_tool_results(&mut self, results: &[ToolResult]) {
         for result in results {
-            if let Some(i) = self
-                .agent_call_ids
+            let name = self
+                .pending_calls
                 .iter()
-                .position(|id| *id == result.tool_use_id)
-            {
-                self.agent_call_ids.swap_remove(i);
-                push_folded(&mut self.tool_text, &result.text);
-            } else if result.is_error {
-                push_folded(&mut self.tool_text, capped(&result.text, TOOL_FIELD_CHARS));
+                .position(|(id, _)| *id == result.tool_use_id)
+                .map(|i| self.pending_calls.swap_remove(i).1);
+            match name.as_deref() {
+                Some(name) if SUBAGENT_TOOLS.contains(&name) => {
+                    push_folded(&mut self.tool_text, &result.text);
+                }
+                Some(name) if QUIET_TOOLS.contains(&name) => {}
+                _ => push_folded(&mut self.tool_text, capped(&result.text, TOOL_OUTPUT_CHARS)),
             }
         }
     }
@@ -257,9 +278,12 @@ impl ParseState {
                     return;
                 };
                 for tool in &content.tool_uses {
-                    if tool.name == "Agent" || tool.name == "Task" {
-                        self.agent_call_ids.push(tool.id.clone());
+                    if self.pending_calls.len() >= MAX_PENDING_CALLS {
+                        // Results that never came (interrupted turns)
+                        self.pending_calls.remove(0);
                     }
+                    self.pending_calls
+                        .push((tool.id.clone(), tool.name.clone()));
                     self.add_tool(&tool.name);
                     // Loading a tool is not using it
                     if tool.name != "ToolSearch" {
@@ -336,6 +360,21 @@ impl ParseState {
         if !name.is_empty() && !self.tools.iter().any(|t| t == name) {
             self.tools.push(name.to_owned());
         }
+    }
+
+    /// All indexed text of a subagent transcript, for its parent's tool tier,
+    /// and the tools the subagent used
+    pub fn subagent_text(&self) -> (String, &[String]) {
+        let mut text = String::with_capacity(
+            self.user_text.len() + self.body.len() + self.tool_text.len() + 2,
+        );
+        for part in [&self.user_text, &self.body, &self.tool_text] {
+            if !text.is_empty() && !part.is_empty() {
+                text.push(' ');
+            }
+            text.push_str(part);
+        }
+        (text, &self.tools)
     }
 
     /// Build the conversation, or `None` if it has nothing worth listing.
@@ -478,21 +517,17 @@ fn parse_from<R: BufRead>(progress: &mut Progress, mut reader: R) -> Result<Cow<
     }
 }
 
-/// Parse a conversation file, resuming from `progress`.
-pub fn process_conversation_file(
-    path: PathBuf,
-    modified: Option<SystemTime>,
-    fallback_dir: &Path,
-    progress: &mut Progress,
-) -> Result<Option<Conversation>> {
-    let mut file = File::open(&path)?;
+/// Parse a conversation file, resuming from `progress`; returns the state as
+/// of the end of the file.
+pub fn parse_file<'a>(path: &Path, progress: &'a mut Progress) -> Result<Cow<'a, ParseState>> {
+    let mut file = File::open(path)?;
     if progress.offset > 0 && !follows_newline(&mut file, progress.offset)? {
         // The prefix we parsed is no longer there (file rewritten): start over
         *progress = Progress::default();
         file.seek(SeekFrom::Start(0))?;
     }
     let reader = BufReader::with_capacity(256 * 1024, file);
-    Ok(parse_from(progress, reader)?.finish(path, modified, fallback_dir))
+    parse_from(progress, reader)
 }
 
 /// Seek to `offset` and report whether the byte just before it is a newline.
@@ -746,7 +781,12 @@ mod tests {
         ]
         .join("\n");
 
-        assert_eq!(parse_jsonl(&content).unwrap().search_text, "hello shown");
+        // Tool results go to the tool tier, after the messages; tool inputs
+        // outside the searchable fields are dropped
+        assert_eq!(
+            parse_jsonl(&content).unwrap().search_text,
+            "hello shown tool output"
+        );
     }
 
     #[test]
@@ -803,7 +843,7 @@ mod tests {
             + "\n";
         std::fs::write(&path, &old).unwrap();
         let mut progress = Progress::default();
-        process_conversation_file(path.clone(), None, fallback, &mut progress).unwrap();
+        parse_file(&path, &mut progress).unwrap();
         assert_eq!(progress.offset as usize, old.len());
 
         // Rewritten with different, longer content: old offset is mid-line
@@ -815,8 +855,9 @@ mod tests {
             + "\n";
         assert!(new.len() > old.len() && new.as_bytes()[old.len() - 1] != b'\n');
         std::fs::write(&path, &new).unwrap();
-        let conv = process_conversation_file(path.clone(), None, fallback, &mut progress)
+        let conv = parse_file(&path, &mut progress)
             .unwrap()
+            .finish(path.clone(), None, fallback)
             .unwrap();
         std::fs::remove_file(&path).ok();
 
@@ -960,7 +1001,8 @@ mod tests {
         assert_eq!(tier_of(&conv, "notes.md"), Some("tool"));
         assert_eq!(tier_of(&conv, "econnrefused"), Some("tool"));
         assert_eq!(tier_of(&conv, "bash"), Some("tool"));
-        // File contents and successful results are not indexed
+        // Content written by a tool call, and the boilerplate result of a
+        // write, are not indexed
         assert_eq!(tier_of(&conv, "secretbody"), None);
         assert_eq!(tier_of(&conv, "quietly"), None);
         // Tool-only messages don't count
@@ -1063,5 +1105,31 @@ mod tests {
         let conv = parse_jsonl(&content).unwrap();
         assert_eq!(tier_of(&conv, "mcp__chrome"), None);
         assert_eq!(conv.tools, ["ToolSearch"]);
+    }
+
+    #[test]
+    fn tool_output_is_capped() {
+        let long = "word ".repeat(2000);
+        let content = [
+            user_msg("q", None),
+            format!(r#"{{"type":"user","timestamp":"2024-01-01T00:00:01Z","message":{{"content":[{{"type":"tool_result","tool_use_id":"t","content":"start {long} lastword"}}]}}}}"#),
+        ]
+        .join("\n");
+        let conv = parse_jsonl(&content).unwrap();
+        assert_eq!(tier_of(&conv, "start"), Some("tool"));
+        assert_eq!(tier_of(&conv, "lastword"), None);
+    }
+
+    #[test]
+    fn indexes_command_output() {
+        let content = [
+            user_msg("q", None),
+            r#"{"type":"assistant","timestamp":"2024-01-01T00:00:01Z","message":{"content":[{"type":"tool_use","id":"b","name":"Bash","input":{"command":"pip install requests"}}]}}"#.to_string(),
+            r#"{"type":"user","timestamp":"2024-01-01T00:00:02Z","message":{"content":[{"type":"tool_result","tool_use_id":"b","content":"Successfully installed requests-2.32.3"}]}}"#.to_string(),
+        ]
+        .join("
+");
+        let conv = parse_jsonl(&content).unwrap();
+        assert_eq!(tier_of(&conv, "requests-2.32"), Some("tool"));
     }
 }

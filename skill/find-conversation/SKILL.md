@@ -14,11 +14,15 @@ are huge. The index has four tiers, and each snippet is labeled with its tier:
 - `[user]` what the user typed, including messages sent mid-task and answers
   to AskUserQuestion
 - `[reply]` Claude's replies and text the user pasted
-- `[tool]` commands run, file paths read/written, search queries, URLs,
-  subagent tasks and reports, background task results, errors, plan files
+- `[tool]` commands run, file paths read/written, search queries, URLs, the
+  start (500 characters) of each tool result (command output, fetched pages,
+  files read, errors), subagent tasks, reports and full transcripts,
+  background task results, plan files
 
-Not indexed: file contents and successful tool output. If the user remembers
-only something that appeared there, say the index can't see it.
+Not indexed: text past the first 500 characters of a tool result, content
+Claude wrote into files, and the boilerplate results of edits. If the user
+remembers only something from deep inside a long output, say the index may
+not reach it.
 
 ## Commands
 

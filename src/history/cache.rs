@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Bump when the parser or the cached data changes meaning.
-const VERSION: u32 = 7;
+const VERSION: u32 = 9;
 
 #[derive(Serialize, Deserialize)]
 pub struct Entry {

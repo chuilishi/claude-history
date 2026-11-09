@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.1.31 (2026-11-09)
 
 - Search also covers messages sent while Claude was working (they were
   missing), answers to Claude's questions, commands run, file paths, search

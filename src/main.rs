@@ -29,12 +29,19 @@ enum Cmd {
     Search {
         #[arg(required = true)]
         words: Vec<String>,
-        /// Match any word instead of all; ranks by how many matched
+        /// Match any word instead of all
         #[arg(long)]
         any: bool,
         /// Only conversations whose project path contains this
         #[arg(long, short)]
         project: Option<String>,
+        /// Only conversations that called a tool whose name contains this
+        #[arg(long, short)]
+        tool: Option<String>,
+        /// Also list the Claude Code session running this command, which is
+        /// left out by default (found through $CLAUDE_CODE_SESSION_ID)
+        #[arg(long)]
+        include_current: bool,
         #[arg(long, short = 'n', default_value_t = 15)]
         limit: usize,
         /// Context snippets per result
@@ -69,6 +76,8 @@ fn run() -> Result<()> {
             words,
             any,
             project,
+            tool,
+            include_current,
             limit,
             snippets,
         }) => {
@@ -76,6 +85,8 @@ fn run() -> Result<()> {
                 words,
                 any,
                 project,
+                tool,
+                include_current,
                 limit,
                 snippets,
             });

@@ -32,6 +32,10 @@ pub struct Conversation {
     pub last_prompt: Option<String>,
     /// Claude's "while you were away" recap, if no message came after it
     pub recap: Option<String>,
+    /// Names of the tools and subagents the conversation used
+    pub tools: Vec<String>,
+    /// Every recap in order, with its time: what a long conversation went through
+    pub recaps: Vec<(Option<DateTime<Local>>, String)>,
     /// Current git branch; `None` outside a repo or when detached
     pub git_branch: Option<String>,
     /// Short name of the model that answered last, e.g. `opus-5.5`

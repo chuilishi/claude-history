@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- `show` lists a timeline of the conversation's recaps, the sites it visited
+  and the tools it used, so a long conversation shows more than its opening
+- `search` ranks by relevance (BM25): rare words weigh more, and long
+  conversations no longer win just by containing more words
+- `search --tool <name>` keeps conversations that called a matching tool
+- `search` leaves out the Claude Code session running it
+  (`$CLAUDE_CODE_SESSION_ID`); `--include-current` brings it back
+- Every recap is searchable at title rank, not just the latest
+- Tool lookups (`ToolSearch`) are no longer indexed as tool use
+
 ## v0.1.31 (2026-11-09)
 
 - Search also covers messages sent while Claude was working (they were

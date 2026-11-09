@@ -93,6 +93,9 @@ pub struct ParseState {
     last_prompt: Option<String>,
     /// Latest `away_summary` recap, dropped when a newer user message arrives
     recap: Option<String>,
+    /// Every recap with its time (ms), consecutive repeats merged: a timeline
+    /// of what a long conversation went through
+    recaps: Vec<(Option<i64>, String)>,
     git_branch: Option<String>,
     entrypoint: Option<String>,
     model: Option<String>,
@@ -258,7 +261,10 @@ impl ParseState {
                         self.agent_call_ids.push(tool.id.clone());
                     }
                     self.add_tool(&tool.name);
-                    push_folded(&mut self.tool_text, &tool.fields);
+                    // Loading a tool is not using it
+                    if tool.name != "ToolSearch" {
+                        push_folded(&mut self.tool_text, &tool.fields);
+                    }
                 }
                 let text = content.text;
                 if text.is_empty() {
@@ -285,7 +291,18 @@ impl ParseState {
                 let text = text
                     .as_deref()
                     .map(|t| t.trim().trim_end_matches(RECAP_SUFFIX));
-                set_text(&mut self.recap, text);
+                let mut recap = None;
+                set_text(&mut recap, text);
+                if let Some(recap) = recap {
+                    if self.recaps.last().is_none_or(|(_, last)| *last != recap) {
+                        let ms = entry
+                            .timestamp
+                            .and_then(|t| DateTime::parse_from_rfc3339(&t).ok())
+                            .map(|t| t.timestamp_millis());
+                        self.recaps.push((ms, recap.clone()));
+                    }
+                    self.recap = Some(recap);
+                }
             }
             "permission-mode" => {
                 if let Some(mode) = entry.permission_mode {
@@ -358,13 +375,9 @@ impl ParseState {
         let mut search_text = String::with_capacity(
             self.user_text.len() + self.body.len() + self.tool_text.len() + 256,
         );
-        let extras = [
-            title.as_deref(),
-            git_branch.as_deref(),
-            model.as_deref(),
-            self.recap.as_deref(),
-        ];
-        for text in extras.into_iter().flatten() {
+        let extras = [title.as_deref(), git_branch.as_deref(), model.as_deref()];
+        let recaps = self.recaps.iter().map(|(_, r)| Some(r.as_str()));
+        for text in extras.into_iter().chain(recaps).flatten() {
             push_folded(&mut search_text, text);
         }
         let mut tier_starts = [0; 3];
@@ -407,6 +420,17 @@ impl ParseState {
             duration_minutes,
             last_prompt: self.last_prompt.clone(),
             recap: self.recap.clone(),
+            tools: self.tools.clone(),
+            recaps: self
+                .recaps
+                .iter()
+                .map(|(ms, r)| {
+                    let time = ms
+                        .and_then(DateTime::from_timestamp_millis)
+                        .map(|t| t.with_timezone(&Local));
+                    (time, r.clone())
+                })
+                .collect(),
             git_branch,
             model,
             lines_added: self.lines_added,
@@ -1001,5 +1025,43 @@ mod tests {
         let list = [in_tool, in_user, in_title];
         let words = crate::search::query_words("cache");
         assert_eq!(crate::search::search(&list, &words), vec![2, 1, 0]);
+    }
+
+    #[test]
+    fn keeps_a_timeline_of_recaps() {
+        let recap = |ts: &str, text: &str| {
+            format!(
+                r#"{{"type":"system","subtype":"away_summary","timestamp":"{ts}","content":"{text} (disable recaps in /config)"}}"#
+            )
+        };
+        let content = [
+            user_msg("start", None),
+            recap("2024-01-01T01:00:00Z", "Researching voice cloning"),
+            recap("2024-01-01T02:00:00Z", "Researching voice cloning"),
+            user_msg("next", None),
+            recap("2024-01-02T01:00:00Z", "Downloading lines in Chrome"),
+        ]
+        .join("\n");
+        let conv = parse_jsonl(&content).unwrap();
+        let texts: Vec<&str> = conv.recaps.iter().map(|(_, r)| r.as_str()).collect();
+        assert_eq!(
+            texts,
+            ["Researching voice cloning", "Downloading lines in Chrome"]
+        );
+        assert!(conv.recaps.iter().all(|(t, _)| t.is_some()));
+        // Earlier recaps rank as high as the title
+        assert_eq!(tier_of(&conv, "cloning"), Some("title"));
+    }
+
+    #[test]
+    fn tool_search_queries_are_not_indexed() {
+        let content = [
+            user_msg("q", None),
+            r#"{"type":"assistant","timestamp":"2024-01-01T00:00:01Z","message":{"content":[{"type":"tool_use","id":"t","name":"ToolSearch","input":{"query":"select:mcp__chrome-devtools__click"}}]}}"#.to_string(),
+        ]
+        .join("\n");
+        let conv = parse_jsonl(&content).unwrap();
+        assert_eq!(tier_of(&conv, "mcp__chrome"), None);
+        assert_eq!(conv.tools, ["ToolSearch"]);
     }
 }

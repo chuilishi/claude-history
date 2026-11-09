@@ -54,15 +54,16 @@ pub fn search(conversations: &[Conversation], words: &[String]) -> Vec<usize> {
 }
 
 /// True if `word` occurs in folded `text` at the start of a word.
-fn matches_word_start(text: &str, word: &str) -> bool {
-    let Some(first) = word.chars().next() else {
-        return true;
-    };
-    if is_cjk(first) {
-        return text.contains(word);
-    }
+pub fn matches_word_start(text: &str, word: &str) -> bool {
+    word.is_empty() || word_start_matches(text, word).next().is_some()
+}
+
+/// Byte offsets in folded `text` where `word` matches at the start of a word.
+pub fn word_start_matches<'a>(text: &'a str, word: &'a str) -> impl Iterator<Item = usize> + 'a {
+    let first = word.chars().next();
     text.match_indices(word)
-        .any(|(i, _)| can_start_match(text[..i].chars().next_back(), first))
+        .map(|(i, _)| i)
+        .filter(move |&i| first.is_some_and(|f| can_start_match(text[..i].chars().next_back(), f)))
 }
 
 /// Whether a query word starting with `first` may match right after `prev`

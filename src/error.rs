@@ -14,6 +14,9 @@ pub enum AppError {
     #[error("User cancelled selection")]
     SelectionCancelled,
 
+    #[error("{0}")]
+    Usage(String),
+
     #[error("Failed to run Claude CLI: {0}")]
     ClaudeExecutionError(String),
 }

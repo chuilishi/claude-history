@@ -1,4 +1,5 @@
 mod claude;
+mod cli;
 mod error;
 mod history;
 mod search;
@@ -9,15 +10,46 @@ use error::{AppError, Result};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// Takes no arguments; parsing still provides `--help`/`--version` and
-/// rejects typos. `scripts/install.sh` reads the `vX.Y.Z` from `--version`.
+/// With no subcommand, opens the TUI. `scripts/install.sh` reads the
+/// `vX.Y.Z` from `--version`.
 #[derive(Parser)]
 #[command(
     name = "claude-history",
     about = "Resume Claude conversations",
     version = concat!("v", env!("CARGO_PKG_VERSION"))
 )]
-struct Args;
+struct Args {
+    #[command(subcommand)]
+    command: Option<Cmd>,
+}
+
+#[derive(clap::Subcommand)]
+enum Cmd {
+    /// Print conversations matching words (prefix match, case-insensitive)
+    Search {
+        #[arg(required = true)]
+        words: Vec<String>,
+        /// Match any word instead of all; ranks by how many matched
+        #[arg(long)]
+        any: bool,
+        /// Only conversations whose project path contains this
+        #[arg(long, short)]
+        project: Option<String>,
+        #[arg(long, short = 'n', default_value_t = 15)]
+        limit: usize,
+        /// Context snippets per result
+        #[arg(long, default_value_t = 2)]
+        snippets: usize,
+    },
+    /// Print details of one conversation, with snippets for optional words
+    Show {
+        /// Session id or a unique prefix of it
+        id: String,
+        words: Vec<String>,
+        #[arg(long, default_value_t = 6)]
+        snippets: usize,
+    },
+}
 
 fn main() {
     if let Err(e) = run() {
@@ -32,7 +64,29 @@ fn main() {
 }
 
 fn run() -> Result<()> {
-    Args::parse();
+    match Args::parse().command {
+        Some(Cmd::Search {
+            words,
+            any,
+            project,
+            limit,
+            snippets,
+        }) => {
+            return cli::search(cli::SearchOptions {
+                words,
+                any,
+                project,
+                limit,
+                snippets,
+            });
+        }
+        Some(Cmd::Show {
+            id,
+            words,
+            snippets,
+        }) => return cli::show(&id, &words, snippets),
+        None => {}
+    }
 
     let rx = history::load_all_conversations_streaming();
     match tui::run_with_loader(rx)? {

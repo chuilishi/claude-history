@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `claude-history search <words...>` and `claude-history show <id>` print
+  matching conversations and their details as plain text, for scripts and
+  for Claude itself. `skill/find-conversation` is a Claude Code skill that
+  uses them to find a past conversation from a vague description
 - Added `claude-history search` and `claude-history show`, which print
   matches as plain text, and a `find-conversation` skill (in `skill/`) that
   lets Claude use them to find a conversation from a vague description

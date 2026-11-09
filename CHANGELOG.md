@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- The session cost is no longer shown in the header
+- The recap on the preview line is told apart by its color only; the `↻`
+  marker is gone
+
 ## v0.1.28 (2026-11-09)
 
 - Conversations show their title again: the `/rename` title, else the title

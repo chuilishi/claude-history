@@ -81,7 +81,6 @@ pub struct ParseState {
     model: Option<String>,
     permission_mode: Option<String>,
     continued_in: Option<String>,
-    cost_usd: Option<f64>,
     lines_added: u64,
     lines_removed: u64,
     /// Tool and subagent names, for search
@@ -224,7 +223,6 @@ impl ParseState {
                 }
             }
             "cost-state" => {
-                self.cost_usd = entry.total_cost_usd.or(self.cost_usd);
                 self.lines_added = entry.total_lines_added.unwrap_or(self.lines_added);
                 self.lines_removed = entry.total_lines_removed.unwrap_or(self.lines_removed);
             }
@@ -324,7 +322,6 @@ impl ParseState {
             recap: self.recap.clone(),
             git_branch,
             model,
-            cost_usd: self.cost_usd.filter(|&c| c >= 0.005),
             lines_added: self.lines_added,
             lines_removed: self.lines_removed,
             permission_mode: self
@@ -718,7 +715,7 @@ mod tests {
             r#"{"type":"ai-title","aiTitle":"Generated title","sessionId":"s"}"#.to_string(),
             r#"{"type":"last-prompt","lastPrompt":"latest   question","sessionId":"s"}"#.to_string(),
             r#"{"type":"tools-used","tools":["Bash","mcp__figma__use_figma"],"sessionId":"s"}"#.to_string(),
-            r#"{"type":"cost-state","totalCostUSD":1.5,"totalLinesAdded":10,"totalLinesRemoved":3,"modelUsage":{}}"#.to_string(),
+            r#"{"type":"cost-state","totalLinesAdded":10,"totalLinesRemoved":3,"modelUsage":{}}"#.to_string(),
             r#"{"type":"continued-in","continuedInSessionId":"next","sessionId":"s"}"#.to_string(),
             r#"{"type":"system","subtype":"away_summary","content":"Did the thing. (disable recaps in /config)"}"#.to_string(),
         ]
@@ -730,7 +727,6 @@ mod tests {
         assert_eq!(conv.model.as_deref(), Some("opus-4.5"));
         assert_eq!(conv.last_prompt.as_deref(), Some("latest question"));
         assert_eq!(conv.recap.as_deref(), Some("Did the thing."));
-        assert_eq!(conv.cost_usd, Some(1.5));
         assert_eq!((conv.lines_added, conv.lines_removed), (10, 3));
         assert_eq!(conv.permission_mode.as_deref(), Some("plan"));
         assert_eq!(conv.continued_in.as_deref(), Some("next"));

@@ -52,8 +52,6 @@ pub struct LogEntry<'a> {
     #[serde(default, borrow)]
     pub tools: Option<Vec<Cow<'a, str>>>,
     /// `cost-state` records
-    #[serde(default, rename = "totalCostUSD")]
-    pub total_cost_usd: Option<f64>,
     #[serde(default)]
     pub total_lines_added: Option<u64>,
     #[serde(default)]

@@ -32,7 +32,6 @@ pub struct Conversation {
     pub git_branch: Option<String>,
     /// Short name of the model that answered last, e.g. `opus-5.5`
     pub model: Option<String>,
-    pub cost_usd: Option<f64>,
     pub lines_added: u64,
     pub lines_removed: u64,
     /// Last permission mode, if `claude --permission-mode` accepts it

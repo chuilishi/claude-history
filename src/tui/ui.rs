@@ -210,9 +210,6 @@ fn render_item<'a>(
     if let Some(model) = &conv.model {
         add(model.clone(), Color::Rgb(150, 130, 190), 1);
     }
-    if let Some(cost) = conv.cost_usd {
-        add(format_cost(cost), Color::Rgb(190, 170, 110), 3);
-    }
     if conv.lines_added + conv.lines_removed > 0 {
         let lines = format!("+{} -{}", conv.lines_added, conv.lines_removed);
         add(lines, Color::Rgb(110, 150, 120), 0);
@@ -314,9 +311,9 @@ fn render_item<'a>(
         .as_ref()
         .filter(|p| !conv.preview.starts_with(p.as_str()));
     if let Some(recap) = &conv.recap {
-        preview_spans.push(Span::styled("↻ ", Style::default().fg(ACCENT)));
+        // Told apart from messages by its color alone
         preview_spans.extend(highlight_text(
-            &truncate(recap, available.saturating_sub(2)),
+            &truncate(recap, available),
             query_words,
             Style::default().fg(Color::Rgb(150, 165, 160)),
             preview_highlight,
@@ -354,15 +351,6 @@ fn render_item<'a>(
     ));
 
     ListItem::new(vec![header, preview, separator])
-}
-
-/// `$0.42`, `$9.66`, `$123`
-fn format_cost(cost: f64) -> String {
-    if cost >= 100.0 {
-        format!("${cost:.0}")
-    } else {
-        format!("${cost:.2}")
-    }
 }
 
 /// Split text into spans with matched portions highlighted (case-insensitive)

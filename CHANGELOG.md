@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.1.29 (2026-11-09)
 
 - The session cost is no longer shown in the header
 - The recap on the preview line is told apart by its color only; the `↻`

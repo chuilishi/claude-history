@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.1.30 (2026-11-09)
 
 - `claude-history search <words...>` and `claude-history show <id>` print
   matching conversations and their details as plain text, for scripts and

@@ -3,7 +3,7 @@
 
 use crate::error::{AppError, Result};
 use crate::history::{self, Conversation, LoaderMessage, hidden};
-use crate::search::{self, matches_word_start, word_start_matches};
+use crate::search::{self, TIER_NAMES, best_tier, tier_at, word_start_matches};
 
 /// Characters of context shown on each side of a match
 const SNIPPET_CONTEXT: usize = 50;
@@ -23,8 +23,9 @@ pub fn search(opts: SearchOptions) -> Result<()> {
     }
     let project = opts.project.as_deref().map(|p| p.to_lowercase());
 
-    // (distinct words matched, conversation); newest first within a score
-    let mut hits: Vec<(usize, Conversation)> = load_sorted()?
+    // Sorted by words matched (with --any), then by the least important tier
+    // needed to match them, then newest first
+    let mut hits: Vec<((usize, usize), Conversation)> = load_sorted()?
         .into_iter()
         .filter(|c| {
             project
@@ -32,28 +33,27 @@ pub fn search(opts: SearchOptions) -> Result<()> {
                 .is_none_or(|p| c.project_path.to_string_lossy().to_lowercase().contains(p))
         })
         .filter_map(|c| {
-            let score = words
-                .iter()
-                .filter(|w| matches_word_start(&c.search_text, w))
-                .count();
+            let tiers: Vec<usize> = words.iter().filter_map(|w| best_tier(&c, w)).collect();
+            let matched = tiers.len();
             let ok = if opts.any {
-                score > 0
+                matched > 0
             } else {
-                score == words.len()
+                matched == words.len()
             };
-            ok.then_some((score, c))
+            let worst = tiers.into_iter().max().unwrap_or(0);
+            ok.then_some(((matched, worst), c))
         })
         .collect();
-    hits.sort_by_key(|(score, _)| std::cmp::Reverse(*score));
+    hits.sort_by_key(|&((matched, worst), _)| (std::cmp::Reverse(matched), worst));
 
     let total = hits.len();
-    for (score, conv) in hits.iter().take(opts.limit) {
+    for ((matched, _), conv) in hits.iter().take(opts.limit) {
         print_header(conv);
         if opts.any {
-            println!("  matched {}/{} words", score, words.len());
+            println!("  matched {}/{} words", matched, words.len());
         }
-        for snippet in snippets(&conv.search_text, &words, opts.snippets) {
-            println!("  … {} …", snippet);
+        for snippet in snippets(conv, &words, opts.snippets) {
+            println!("  {snippet}");
         }
         println!();
     }
@@ -96,8 +96,8 @@ pub fn show(id: &str, words: &[String], snippet_count: usize) -> Result<()> {
         println!("  recap:    {}", one_line(r));
     }
     let words = search::query_words(&words.join(" "));
-    for snippet in snippets(&conv.search_text, &words, snippet_count) {
-        println!("  … {} …", snippet);
+    for snippet in snippets(conv, &words, snippet_count) {
+        println!("  {snippet}");
     }
     println!(
         "  resume:   cd \"{}\" && claude --resume {}",
@@ -128,27 +128,33 @@ fn print_header(conv: &Conversation) {
     println!("  {}  ({} msgs){}", title, conv.message_count, branch);
 }
 
-/// Text around the first matches, one word after another, without overlap
-fn snippets(text: &str, words: &[String], max: usize) -> Vec<String> {
-    let mut spans: Vec<(usize, usize)> = Vec::new();
+/// Text around the first (most important) matches, one word after another,
+/// without overlap, each labeled with its tier
+fn snippets(conv: &Conversation, words: &[String], max: usize) -> Vec<String> {
+    let text = conv.search_text.as_str();
+    let mut spans: Vec<(usize, usize, usize)> = Vec::new();
     'words: for word in words.iter().cycle().take(words.len() * max) {
         if spans.len() >= max {
             break;
         }
         for start in word_start_matches(text, word) {
-            if spans.iter().any(|&(s, e)| start >= s && start < e) {
+            if spans.iter().any(|&(s, e, _)| start >= s && start < e) {
                 continue;
             }
-            let from = back_chars(text, start, SNIPPET_CONTEXT);
-            let to = forward_chars(text, start + word.len(), SNIPPET_CONTEXT);
-            spans.push((from, to));
+            // Context stays within the match's tier
+            let tier = tier_at(conv, start);
+            let tier_start = tier.checked_sub(1).map_or(0, |t| conv.tier_starts[t]);
+            let tier_end = conv.tier_starts.get(tier).copied().unwrap_or(text.len());
+            let from = back_chars(text, start, SNIPPET_CONTEXT).max(tier_start);
+            let to = forward_chars(text, start + word.len(), SNIPPET_CONTEXT).min(tier_end);
+            spans.push((from, to, tier));
             continue 'words;
         }
     }
     spans.sort();
     spans
         .into_iter()
-        .map(|(s, e)| text[s..e].to_string())
+        .map(|(s, e, tier)| format!("[{}] … {} …", TIER_NAMES[tier], text[s..e].trim()))
         .collect()
 }
 

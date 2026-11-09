@@ -1,6 +1,8 @@
 use super::Conversation;
 use super::path::format_short_name_from_path;
-use crate::claude::{Content, LogEntry, Message};
+use crate::claude::{
+    Answers, Attachment, Content, LogEntry, Message, TOOL_FIELD_CHARS, ToolResult, capped,
+};
 use crate::error::Result;
 use crate::search::push_folded;
 use chrono::{DateTime, Local};
@@ -40,6 +42,13 @@ const PERMISSION_MODES: [&str; 6] = [
     "plan",
 ];
 
+/// Start of a background task or subagent report delivered as a user message
+const TASK_NOTIFICATION: &str = "<task-notification>";
+
+/// Text the user pasted is wrapped in these
+const PASTED_OPEN: &str = "<pasted_content";
+const PASTED_CLOSE: &str = "</pasted_content";
+
 /// Appended by Claude Code to every recap
 const RECAP_SUFFIX: &str = "(disable recaps in /config)";
 
@@ -56,8 +65,16 @@ const COMMAND_WRAPPER_PREFIXES: [&str; 3] = [
 /// stopped instead of being read again from the start.
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct ParseState {
-    /// Folded, whitespace-normalized text of all messages (summary not included)
+    /// Folded, whitespace-normalized text the user typed, including messages
+    /// queued while Claude worked and answers to Claude's questions
+    user_text: String,
+    /// Folded text of Claude's replies and of content the user pasted
     body: String,
+    /// Folded tool inputs, failed tool results, subagent reports, background
+    /// task notifications and plans
+    tool_text: String,
+    /// Ids of `Agent` tool calls, whose results (subagent reports) are kept
+    agent_call_ids: Vec<String>,
     /// Display text of the first few messages
     preview: String,
     preview_parts: u8,
@@ -88,21 +105,65 @@ pub struct ParseState {
 }
 
 impl ParseState {
-    /// Text of a message, recording its timestamp. `None` for entries
+    /// Content of a message, recording its timestamp. `None` for entries
     /// without a message, timestamp or content.
-    fn message_text(
+    fn message_content(
         &mut self,
         message: Option<Message>,
         timestamp: Option<Cow<str>>,
-    ) -> Option<String> {
+    ) -> Option<Content> {
         let timestamp = timestamp?;
-        let Content(text) = message?.content?;
+        let content = message?.content?;
         if let Ok(ts) = DateTime::parse_from_rfc3339(&timestamp) {
             let ms = ts.timestamp_millis();
             self.first_ts_ms.get_or_insert(ms);
             self.last_ts_ms = Some(ms);
         }
-        Some(text)
+        Some(content)
+    }
+
+    /// Index a user message by who sent it, and count it if the user typed it.
+    fn add_user_text(&mut self, text: &str, origin: Option<&str>) {
+        if text.trim().is_empty() || is_command_wrapper(text) {
+            return;
+        }
+        // Background task and subagent reports, other sessions, auto-continue
+        let from_user = matches!(origin, None | Some("human"))
+            && !text.trim_start().starts_with(TASK_NOTIFICATION);
+        if !from_user {
+            push_folded(&mut self.tool_text, text);
+            return;
+        }
+
+        let (typed, pasted) = split_pasted(text);
+        push_folded(&mut self.user_text, &typed);
+        push_folded(&mut self.body, &pasted);
+
+        let is_warmup = !self.seen_real_user_message && text.trim() == "Warmup";
+        if is_warmup {
+            self.skip_next_assistant = true;
+        } else {
+            self.message_count += 1;
+            self.push_preview(text);
+            self.seen_real_user_message = true;
+            self.recap = None;
+        }
+    }
+
+    /// Keep subagent reports, and the start of failed tool results.
+    fn add_tool_results(&mut self, results: &[ToolResult]) {
+        for result in results {
+            if let Some(i) = self
+                .agent_call_ids
+                .iter()
+                .position(|id| *id == result.tool_use_id)
+            {
+                self.agent_call_ids.swap_remove(i);
+                push_folded(&mut self.tool_text, &result.text);
+            } else if result.is_error {
+                push_folded(&mut self.tool_text, capped(&result.text, TOOL_FIELD_CHARS));
+            }
+        }
     }
 
     fn push_preview(&mut self, text: &str) {
@@ -158,34 +219,48 @@ impl ParseState {
             // Injected by Claude Code (context, compaction summaries), not typed
             "user" if entry.is_meta == Some(true) || entry.is_compact_summary == Some(true) => {}
             "user" => {
-                let Some(text) = self.message_text(entry.message, entry.timestamp) else {
+                if let Some(Answers(answers)) = &entry.tool_use_result {
+                    push_folded(&mut self.user_text, answers);
+                }
+                let origin = entry.origin.and_then(|o| o.0);
+                let Some(content) = self.message_content(entry.message, entry.timestamp) else {
                     return;
                 };
-                if text.trim().is_empty() || is_command_wrapper(&text) {
-                    return;
-                }
-
-                push_folded(&mut self.body, &text);
-
-                let is_warmup = !self.seen_real_user_message && text.trim() == "Warmup";
-                if is_warmup {
-                    self.skip_next_assistant = true;
-                } else {
-                    self.message_count += 1;
-                    self.push_preview(&text);
-                    self.seen_real_user_message = true;
-                    self.recap = None;
-                }
+                self.add_tool_results(&content.tool_results);
+                self.add_user_text(&content.text, origin.as_deref());
             }
+            "attachment" => match entry.attachment {
+                Some(Attachment {
+                    kind,
+                    prompt: Some(prompt),
+                    origin,
+                    is_meta: false,
+                    ..
+                }) if kind == "queued_command" => {
+                    self.add_user_text(&prompt.text, origin.and_then(|o| o.0).as_deref());
+                }
+                Some(Attachment {
+                    plan: Some(plan), ..
+                }) => push_folded(&mut self.tool_text, &plan),
+                _ => {}
+            },
             "assistant" => {
                 if let Some(model) = entry.message.as_ref().and_then(|m| m.model.as_deref())
                     && !model.starts_with('<')
                 {
                     self.model = Some(model.to_owned());
                 }
-                let Some(text) = self.message_text(entry.message, entry.timestamp) else {
+                let Some(content) = self.message_content(entry.message, entry.timestamp) else {
                     return;
                 };
+                for tool in &content.tool_uses {
+                    if tool.name == "Agent" || tool.name == "Task" {
+                        self.agent_call_ids.push(tool.id.clone());
+                    }
+                    self.add_tool(&tool.name);
+                    push_folded(&mut self.tool_text, &tool.fields);
+                }
+                let text = content.text;
                 if text.is_empty() {
                     return;
                 }
@@ -278,22 +353,33 @@ impl ParseState {
             .filter(|b| !b.is_empty() && b != "HEAD");
         let model = self.model.as_deref().map(short_model_name);
 
-        // `push_folded` separates words with spaces, so this is one word list
-        let mut search_text = String::with_capacity(self.body.len() + 256);
+        // One word list (`push_folded` separates words with spaces) made of
+        // tiers in order of importance; see `Conversation::tier_starts`
+        let mut search_text = String::with_capacity(
+            self.user_text.len() + self.body.len() + self.tool_text.len() + 256,
+        );
         let extras = [
             title.as_deref(),
             git_branch.as_deref(),
             model.as_deref(),
             self.recap.as_deref(),
         ];
-        let tools = self.tools.iter().map(String::as_str);
-        for text in extras.into_iter().flatten().chain(tools) {
+        for text in extras.into_iter().flatten() {
             push_folded(&mut search_text, text);
         }
-        if !search_text.is_empty() && !self.body.is_empty() {
-            search_text.push(' ');
+        let mut tier_starts = [0; 3];
+        let tiers = [&self.user_text, &self.body, &self.tool_text];
+        for (start, tier) in tier_starts.iter_mut().zip(tiers) {
+            if !search_text.is_empty() && !tier.is_empty() {
+                search_text.push(' ');
+            }
+            *start = search_text.len();
+            search_text.push_str(tier);
         }
-        search_text.push_str(&self.body);
+        // Tool names go with the tool tier
+        for tool in &self.tools {
+            push_folded(&mut search_text, tool);
+        }
 
         let duration_minutes = match (self.first_ts_ms, self.last_ts_ms) {
             (Some(first), Some(last)) => {
@@ -313,6 +399,7 @@ impl ParseState {
             timestamp,
             preview: self.preview.clone(),
             search_text,
+            tier_starts,
             project_name: format_short_name_from_path(&project_path),
             project_path,
             message_count: self.message_count,
@@ -442,6 +529,37 @@ fn is_command_wrapper(message: &str) -> bool {
         .any(|prefix| trimmed.starts_with(prefix))
 }
 
+/// Split a message into what the user typed and what they pasted
+/// (`<pasted_content ...>...</pasted_content ...>` blocks).
+fn split_pasted(text: &str) -> (Cow<'_, str>, Cow<'_, str>) {
+    if !text.contains(PASTED_OPEN) {
+        return (Cow::Borrowed(text), Cow::Borrowed(""));
+    }
+    let (mut typed, mut pasted) = (String::new(), String::new());
+    let mut rest = text;
+    while let Some(open) = rest.find(PASTED_OPEN) {
+        typed.push_str(&rest[..open]);
+        typed.push(' ');
+        let inner = &rest[open..];
+        let inner = inner.find('>').map_or(inner, |i| &inner[i + 1..]);
+        let (block, after) = match inner.find(PASTED_CLOSE) {
+            Some(close) => {
+                let after = &inner[close..];
+                (
+                    &inner[..close],
+                    after.find('>').map_or("", |i| &after[i + 1..]),
+                )
+            }
+            None => (inner, ""),
+        };
+        pasted.push_str(block);
+        pasted.push(' ');
+        rest = after;
+    }
+    typed.push_str(rest);
+    (Cow::Owned(typed), Cow::Owned(pasted))
+}
+
 /// Remove XML-like tags (`<foo>`, `</foo>`), which make previews unreadable
 fn strip_tags(text: &str) -> Cow<'_, str> {
     if !text.contains('<') {
@@ -534,7 +652,8 @@ mod tests {
         .join("\n");
 
         let conv = parse_jsonl(&content).unwrap();
-        assert_eq!(conv.search_text, "hello hi another question");
+        // What the user typed comes before Claude's replies
+        assert_eq!(conv.search_text, "hello another question hi");
     }
 
     #[test]
@@ -792,5 +911,95 @@ mod tests {
         assert_eq!(short_model_name("claude-opus-4-5-20251101"), "opus-4.5");
         assert_eq!(short_model_name("claude-3-5-sonnet-20241022"), "sonnet-3.5");
         assert_eq!(short_model_name("claude-opus-4-6"), "opus-4.6");
+    }
+
+    /// Tier name of the first place `word` matches
+    fn tier_of(conv: &Conversation, word: &str) -> Option<&'static str> {
+        crate::search::best_tier(conv, word).map(|t| crate::search::TIER_NAMES[t])
+    }
+
+    #[test]
+    fn indexes_text_in_tiers() {
+        let content = [
+            r#"{"type":"ai-title","aiTitle":"Proxy setup","sessionId":"s"}"#.to_string(),
+            user_msg("set up the clash proxy", None),
+            r#"{"type":"assistant","timestamp":"2024-01-01T00:00:01Z","message":{"content":[{"type":"text","text":"Running curl now"},{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"curl -x http://127.0.0.1:7890 example.com","timeout":5000}},{"type":"tool_use","id":"t2","name":"Write","input":{"file_path":"notes.md","content":"secretbody"}}]}}"#.to_string(),
+            r#"{"type":"user","timestamp":"2024-01-01T00:00:02Z","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"ECONNREFUSED here","is_error":true},{"type":"tool_result","tool_use_id":"t2","content":"wrote quietly"}]}}"#.to_string(),
+        ]
+        .join("
+");
+        let conv = parse_jsonl(&content).unwrap();
+        assert_eq!(tier_of(&conv, "proxy"), Some("title"));
+        assert_eq!(tier_of(&conv, "clash"), Some("user"));
+        assert_eq!(tier_of(&conv, "curl"), Some("reply"));
+        assert_eq!(tier_of(&conv, "7890"), Some("tool"));
+        assert_eq!(tier_of(&conv, "notes.md"), Some("tool"));
+        assert_eq!(tier_of(&conv, "econnrefused"), Some("tool"));
+        assert_eq!(tier_of(&conv, "bash"), Some("tool"));
+        // File contents and successful results are not indexed
+        assert_eq!(tier_of(&conv, "secretbody"), None);
+        assert_eq!(tier_of(&conv, "quietly"), None);
+        // Tool-only messages don't count
+        assert_eq!(conv.message_count, 2);
+    }
+
+    #[test]
+    fn indexes_queued_messages_answers_and_subagent_reports() {
+        let content = [
+            user_msg("start", None),
+            r#"{"type":"attachment","timestamp":"2024-01-01T00:00:01Z","attachment":{"type":"queued_command","prompt":"also rename the button","origin":{"kind":"human"}}}"#.to_string(),
+            r#"{"type":"attachment","attachment":{"type":"queued_command","prompt":"<task-notification>agent found flaky tests</task-notification>","origin":{"kind":"task-notification"}}}"#.to_string(),
+            r#"{"type":"assistant","timestamp":"2024-01-01T00:00:02Z","message":{"content":[{"type":"tool_use","id":"a1","name":"Agent","input":{"description":"survey tts","prompt":"compare voice cloning"}}]}}"#.to_string(),
+            r#"{"type":"user","timestamp":"2024-01-01T00:00:03Z","message":{"content":[{"type":"tool_result","tool_use_id":"a1","content":[{"type":"text","text":"CosyVoice wins"}]}]}}"#.to_string(),
+            r#"{"type":"user","timestamp":"2024-01-01T00:00:04Z","toolUseResult":{"questions":[],"answers":{"Which DB?":"Postgres"}},"message":{"content":[{"type":"tool_result","tool_use_id":"q1","content":"answered"}]}}"#.to_string(),
+            r#"{"type":"user","timestamp":"2024-01-01T00:00:05Z","origin":{"kind":"task-notification"},"message":{"content":"<task-notification>build done</task-notification>"}}"#.to_string(),
+            r##"{"type":"attachment","attachment":{"type":"plan_file_reference","planFilePath":"p.md","planContent":"# Migration plan"}}"##.to_string(),
+        ]
+        .join("
+");
+        let conv = parse_jsonl(&content).unwrap();
+        assert_eq!(tier_of(&conv, "rename"), Some("user"));
+        assert_eq!(tier_of(&conv, "postgres"), Some("user"));
+        assert_eq!(tier_of(&conv, "flaky"), Some("tool"));
+        assert_eq!(tier_of(&conv, "cosyvoice"), Some("tool"));
+        assert_eq!(tier_of(&conv, "cloning"), Some("tool"));
+        assert_eq!(tier_of(&conv, "build"), Some("tool"));
+        assert_eq!(tier_of(&conv, "migration"), Some("tool"));
+        // "start" and the queued message; notifications are not the user's
+        assert_eq!(conv.message_count, 2);
+    }
+
+    #[test]
+    fn pasted_text_ranks_below_typed_text() {
+        let content = user_msg(
+            r#"<pasted_content id=\"ab\">copied report</pasted_content id=\"ab\"> what do you think"#,
+            None,
+        );
+        let conv = parse_jsonl(&content).unwrap();
+        assert_eq!(tier_of(&conv, "think"), Some("user"));
+        assert_eq!(tier_of(&conv, "report"), Some("reply"));
+    }
+
+    #[test]
+    fn search_ranks_by_tier_then_list_order() {
+        let conv = |lines: Vec<String>| {
+            parse_jsonl(&lines.join(
+                "
+",
+            ))
+            .unwrap()
+        };
+        let in_tool = conv(vec![
+            user_msg("q", None),
+            r#"{"type":"assistant","timestamp":"2024-01-01T00:00:01Z","message":{"content":[{"type":"tool_use","id":"t","name":"Read","input":{"file_path":"cache.rs"}}]}}"#.to_string(),
+        ]);
+        let in_user = conv(vec![user_msg("fix the cache", None)]);
+        let in_title = conv(vec![
+            r#"{"type":"custom-title","customTitle":"Cache work","sessionId":"s"}"#.to_string(),
+            user_msg("hi", None),
+        ]);
+        let list = [in_tool, in_user, in_title];
+        let words = crate::search::query_words("cache");
+        assert_eq!(crate::search::search(&list, &words), vec![2, 1, 0]);
     }
 }

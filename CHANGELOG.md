@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Search also covers messages sent while Claude was working (they were
+  missing), answers to Claude's questions, commands run, file paths, search
+  queries, URLs, subagent reports, background task results, errors and plans
+- Results are ranked by where the words match: title and recap first, then
+  what you typed, then Claude's replies and pasted text, then tool activity;
+  newest first within each. `search` labels each snippet with its tier
+- Background task notifications no longer count as messages or show in the
+  preview
 - `install.ps1` retries each download up to three times, since proxies and
   GitHub's CDN fail transiently (504)
 

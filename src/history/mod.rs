@@ -16,8 +16,12 @@ pub struct Conversation {
     pub timestamp: DateTime<Local>,
     /// Display text of the first few messages, tags stripped
     pub preview: String,
-    /// Folded summary and message text, matched by search
+    /// Folded text matched by search, in tiers of falling importance: title
+    /// and recap; what the user typed; Claude's replies and pasted text; tool
+    /// calls, subagent reports and plans
     pub search_text: String,
+    /// Byte offsets in `search_text` where tiers 1, 2 and 3 start
+    pub tier_starts: [usize; 3],
     pub project_name: String,
     pub project_path: PathBuf,
     pub message_count: usize,

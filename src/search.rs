@@ -39,22 +39,54 @@ pub fn query_words(query: &str) -> Vec<String> {
         .collect()
 }
 
-/// Indices of the conversations that match every query word, in list order.
+/// Names of the tiers of `Conversation::search_text`, most important first
+pub const TIER_NAMES: [&str; 4] = ["title", "user", "reply", "tool"];
+
+/// Tier of `conv.search_text` that byte offset `pos` falls in
+pub fn tier_at(conv: &Conversation, pos: usize) -> usize {
+    conv.tier_starts
+        .iter()
+        .filter(|&&start| pos >= start)
+        .count()
+}
+
+/// Most important tier `word` matches in, or `None` if it does not match.
+/// Matches come in text order and tiers are laid out in order of
+/// importance, so the first match decides.
+pub fn best_tier(conv: &Conversation, word: &str) -> Option<usize> {
+    if word.is_empty() {
+        return Some(0);
+    }
+    word_start_matches(&conv.search_text, word)
+        .next()
+        .map(|pos| tier_at(conv, pos))
+}
+
+/// Rank of a conversation for a query: the least important of the tiers
+/// its words best match in, i.e. how deep one has to look to find them all.
+/// `None` if some word does not match.
+pub fn rank(conv: &Conversation, words: &[String]) -> Option<usize> {
+    words
+        .iter()
+        .map(|w| best_tier(conv, w))
+        .try_fold(0, |worst, tier| Some(worst.max(tier?)))
+}
+
+/// Indices of the conversations that match every query word, more important
+/// matches first (see [`rank`]), list order within a rank.
 pub fn search(conversations: &[Conversation], words: &[String]) -> Vec<usize> {
-    conversations
+    let mut hits: Vec<(usize, usize)> = conversations
         .par_iter()
         .enumerate()
-        .filter(|(_, conv)| {
-            words
-                .iter()
-                .all(|w| matches_word_start(&conv.search_text, w))
-        })
-        .map(|(idx, _)| idx)
-        .collect()
+        .filter_map(|(idx, conv)| Some((rank(conv, words)?, idx)))
+        .collect();
+    hits.sort_by_key(|&(rank, _)| rank);
+    hits.into_iter().map(|(_, idx)| idx).collect()
 }
 
 /// True if `word` occurs in folded `text` at the start of a word.
-pub fn matches_word_start(text: &str, word: &str) -> bool {
+#[cfg(test)]
+fn matches_word_start(text: &str, word: &str) -> bool {
     word.is_empty() || word_start_matches(text, word).next().is_some()
 }
 

@@ -5,9 +5,19 @@ description: Find a past Claude Code conversation from a vague memory ("那次�
 
 # Find a past conversation
 
-`claude-history` keeps an index of every Claude Code session on this machine
-(titles, recaps, every user/assistant message, tool names, branch). Query it;
-never grep or read `~/.claude/projects/**/*.jsonl` directly — they are huge.
+`claude-history` keeps an index of every Claude Code session on this machine.
+Query it; never grep or read `~/.claude/projects/**/*.jsonl` directly — they
+are huge. The index has four tiers, and each snippet is labeled with its tier:
+
+- `[title]` title, recap, branch, model
+- `[user]` what the user typed, including messages sent mid-task and answers
+  to AskUserQuestion
+- `[reply]` Claude's replies and text the user pasted
+- `[tool]` commands run, file paths read/written, search queries, URLs,
+  subagent tasks and reports, background task results, errors, plan files
+
+Not indexed: file contents and successful tool output. If the user remembers
+only something that appeared there, say the index can't see it.
 
 ## Commands
 
@@ -17,8 +27,11 @@ claude-history show <id-prefix> [words...] [--snippets 6]
 ```
 
 - Words are case-insensitive **prefix** matches (`cach` hits `cache`, `caching`).
-  Chinese words match anywhere. Default is AND; `--any` is OR, ranked by how
-  many words matched, then newest first.
+  Chinese words match anywhere. Default is AND; `--any` is OR. Results rank by
+  words matched (with `--any`), then by the deepest tier needed to match them
+  (title first, tool last), then newest first.
+- A file name, command or URL the user remembers is a strong term: it hits
+  the `[tool]` tier even when nobody wrote it in a message.
 - Each result: session id, last-activity time, project path, title, message
   count, branch, and snippets around the matches.
 - `show` prints the opening, last prompt, recap and snippets for given words,

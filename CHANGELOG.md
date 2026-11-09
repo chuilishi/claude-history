@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.1.27 (2026-11-09)
 
 - Resumed conversations are launched with `--allow-dangerously-skip-permissions`,
   so bypass permissions mode is always available in the `Shift+Tab` cycle

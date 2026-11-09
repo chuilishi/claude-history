@@ -21,8 +21,26 @@ pub struct Conversation {
     pub project_name: String,
     pub project_path: PathBuf,
     pub message_count: usize,
-    pub summary: Option<String>,
+    /// `/rename` title, else Claude's generated title, else an old-style summary
+    pub title: Option<String>,
     pub duration_minutes: Option<u64>,
+    /// The user's latest prompt
+    pub last_prompt: Option<String>,
+    /// Claude's "while you were away" recap, if no message came after it
+    pub recap: Option<String>,
+    /// Current git branch; `None` outside a repo or when detached
+    pub git_branch: Option<String>,
+    /// Short name of the model that answered last, e.g. `opus-5.5`
+    pub model: Option<String>,
+    pub cost_usd: Option<f64>,
+    pub lines_added: u64,
+    pub lines_removed: u64,
+    /// Last permission mode, if `claude --permission-mode` accepts it
+    pub permission_mode: Option<String>,
+    /// Session this one was continued in
+    pub continued_in: Option<String>,
+    /// Started through the SDK rather than the interactive CLI
+    pub is_sdk: bool,
 }
 
 pub enum LoaderMessage {

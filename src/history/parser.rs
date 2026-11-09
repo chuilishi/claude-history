@@ -16,6 +16,33 @@ const PREVIEW_PARTS: u8 = 3;
 /// Characters kept per preview message; more never fit on one line
 const PREVIEW_PART_CHARS: usize = 300;
 
+/// Characters kept of the last prompt and of the recap
+const SIDE_TEXT_CHARS: usize = 300;
+
+/// Lines of these types are large and carry nothing the list needs, so they
+/// are dropped before being parsed. They always start with their `type`.
+const SKIPPED_LINE_PREFIXES: [&[u8]; 6] = [
+    br#"{"type":"api-request"#,
+    br#"{"type":"file-history-"#,
+    br#"{"type":"queue-operation""#,
+    br#"{"type":"atis-latch""#,
+    br#"{"type":"artifact-"#,
+    br#"{"type":"mode""#,
+];
+
+/// Values `claude --permission-mode` accepts
+const PERMISSION_MODES: [&str; 6] = [
+    "acceptEdits",
+    "auto",
+    "bypassPermissions",
+    "manual",
+    "dontAsk",
+    "plan",
+];
+
+/// Appended by Claude Code to every recap
+const RECAP_SUFFIX: &str = "(disable recaps in /config)";
+
 /// User messages starting with one of these are wrappers around slash commands
 /// and their output (`/clear`, `/model`, ...), not something the user wrote.
 const COMMAND_WRAPPER_PREFIXES: [&str; 3] = [
@@ -38,9 +65,27 @@ pub struct ParseState {
     skip_next_assistant: bool,
     cwd: Option<PathBuf>,
     message_count: usize,
+    /// From a `summary` record (older Claude Code versions)
     summary: Option<String>,
     first_ts_ms: Option<i64>,
     last_ts_ms: Option<i64>,
+    /// Latest `ai-title` record; Claude Code rewrites it as the session goes on
+    ai_title: Option<String>,
+    /// Latest `custom-title` record (`/rename`)
+    custom_title: Option<String>,
+    last_prompt: Option<String>,
+    /// Latest `away_summary` recap, dropped when a newer user message arrives
+    recap: Option<String>,
+    git_branch: Option<String>,
+    entrypoint: Option<String>,
+    model: Option<String>,
+    permission_mode: Option<String>,
+    continued_in: Option<String>,
+    cost_usd: Option<f64>,
+    lines_added: u64,
+    lines_removed: u64,
+    /// Tool and subagent names, for search
+    tools: Vec<String>,
 }
 
 impl ParseState {
@@ -84,7 +129,12 @@ impl ParseState {
 
     /// Feed one JSONL line; malformed or irrelevant lines are ignored.
     pub fn feed_line(&mut self, line: &[u8]) {
-        if line.trim_ascii().is_empty() {
+        let line = line.trim_ascii();
+        if line.is_empty()
+            || SKIPPED_LINE_PREFIXES
+                .iter()
+                .any(|prefix| line.starts_with(prefix))
+        {
             return;
         }
         let Ok(entry) = serde_json::from_slice::<LogEntry>(line) else {
@@ -96,8 +146,18 @@ impl ParseState {
         {
             self.cwd = Some(PathBuf::from(cwd.as_ref()));
         }
+        if let Some(branch) = &entry.git_branch {
+            self.git_branch = Some(branch.as_ref().to_owned());
+        }
+        if self.entrypoint.is_none()
+            && let Some(entrypoint) = &entry.entrypoint
+        {
+            self.entrypoint = Some(entrypoint.as_ref().to_owned());
+        }
 
         match entry.kind.as_ref() {
+            // Injected by Claude Code (context, compaction summaries), not typed
+            "user" if entry.is_meta == Some(true) || entry.is_compact_summary == Some(true) => {}
             "user" => {
                 let Some(text) = self.message_text(entry.message, entry.timestamp) else {
                     return;
@@ -115,9 +175,15 @@ impl ParseState {
                     self.message_count += 1;
                     self.push_preview(&text);
                     self.seen_real_user_message = true;
+                    self.recap = None;
                 }
             }
             "assistant" => {
+                if let Some(model) = entry.message.as_ref().and_then(|m| m.model.as_deref())
+                    && !model.starts_with('<')
+                {
+                    self.model = Some(model.to_owned());
+                }
                 let Some(text) = self.message_text(entry.message, entry.timestamp) else {
                     return;
                 };
@@ -137,7 +203,48 @@ impl ParseState {
             "summary" if self.summary.is_none() => {
                 self.summary = entry.summary.map(Cow::into_owned);
             }
+            "ai-title" => set_text(&mut self.ai_title, entry.ai_title.as_deref()),
+            "custom-title" => set_text(&mut self.custom_title, entry.custom_title.as_deref()),
+            "last-prompt" => set_text(&mut self.last_prompt, entry.last_prompt.as_deref()),
+            "system" if entry.subtype.as_deref() == Some("away_summary") => {
+                let text = entry.content.and_then(|c| c.0);
+                let text = text
+                    .as_deref()
+                    .map(|t| t.trim().trim_end_matches(RECAP_SUFFIX));
+                set_text(&mut self.recap, text);
+            }
+            "permission-mode" => {
+                if let Some(mode) = entry.permission_mode {
+                    self.permission_mode = Some(mode.into_owned());
+                }
+            }
+            "continued-in" => {
+                if let Some(id) = entry.continued_in_session_id {
+                    self.continued_in = Some(id.into_owned());
+                }
+            }
+            "cost-state" => {
+                self.cost_usd = entry.total_cost_usd.or(self.cost_usd);
+                self.lines_added = entry.total_lines_added.unwrap_or(self.lines_added);
+                self.lines_removed = entry.total_lines_removed.unwrap_or(self.lines_removed);
+            }
+            "tools-used" => {
+                for tool in entry.tools.into_iter().flatten() {
+                    self.add_tool(&tool);
+                }
+            }
+            "agent-name" => {
+                if let Some(name) = entry.agent_name {
+                    self.add_tool(&name);
+                }
+            }
             _ => {}
+        }
+    }
+
+    fn add_tool(&mut self, name: &str) {
+        if !name.is_empty() && !self.tools.iter().any(|t| t == name) {
+            self.tools.push(name.to_owned());
         }
     }
 
@@ -161,9 +268,31 @@ impl ParseState {
             .or_else(|| modified.map(DateTime::<Local>::from))
             .unwrap_or_else(Local::now);
 
-        let mut search_text = String::with_capacity(self.body.len() + 64);
-        if let Some(summary) = &self.summary {
-            push_folded(&mut search_text, summary);
+        let title = self
+            .custom_title
+            .as_ref()
+            .or(self.ai_title.as_ref())
+            .or(self.summary.as_ref())
+            .cloned();
+        let git_branch = self
+            .git_branch
+            .clone()
+            .filter(|b| !b.is_empty() && b != "HEAD");
+        let model = self.model.as_deref().map(short_model_name);
+
+        // `push_folded` separates words with spaces, so this is one word list
+        let mut search_text = String::with_capacity(self.body.len() + 256);
+        let extras = [
+            title.as_deref(),
+            git_branch.as_deref(),
+            model.as_deref(),
+            self.recap.as_deref(),
+        ];
+        let tools = self.tools.iter().map(String::as_str);
+        for text in extras.into_iter().flatten().chain(tools) {
+            push_folded(&mut search_text, text);
+        }
+        if !search_text.is_empty() && !self.body.is_empty() {
             search_text.push(' ');
         }
         search_text.push_str(&self.body);
@@ -189,8 +318,24 @@ impl ParseState {
             project_name: format_short_name_from_path(&project_path),
             project_path,
             message_count: self.message_count,
-            summary: self.summary.clone(),
+            title,
             duration_minutes,
+            last_prompt: self.last_prompt.clone(),
+            recap: self.recap.clone(),
+            git_branch,
+            model,
+            cost_usd: self.cost_usd.filter(|&c| c >= 0.005),
+            lines_added: self.lines_added,
+            lines_removed: self.lines_removed,
+            permission_mode: self
+                .permission_mode
+                .clone()
+                .filter(|m| PERMISSION_MODES.contains(&m.as_str())),
+            continued_in: self.continued_in.clone(),
+            is_sdk: self
+                .entrypoint
+                .as_deref()
+                .is_some_and(|e| e.starts_with("sdk")),
         })
     }
 }
@@ -247,6 +392,50 @@ fn follows_newline(file: &mut File, offset: u64) -> Result<bool> {
     file.seek(SeekFrom::Start(offset - 1))?;
     let mut byte = [0u8; 1];
     Ok(file.read(&mut byte)? == 1 && byte[0] == b'\n')
+}
+
+/// Store `text` with whitespace collapsed and tags stripped, capped at
+/// [`SIDE_TEXT_CHARS`]; blank text leaves `slot` unchanged.
+fn set_text(slot: &mut Option<String>, text: Option<&str>) {
+    let Some(text) = text else {
+        return;
+    };
+    let mut out = String::new();
+    let mut kept = 0;
+    for word in strip_tags(text).split_whitespace() {
+        if kept >= SIDE_TEXT_CHARS {
+            break;
+        }
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(word);
+        kept += word.chars().count() + 1;
+    }
+    if !out.is_empty() {
+        *slot = Some(out);
+    }
+}
+
+/// `claude-opus-4-5-20251101` -> `opus-4.5`, `claude-3-5-sonnet-20241022` -> `sonnet-3.5`
+fn short_model_name(model: &str) -> String {
+    let model = model.strip_prefix("claude-").unwrap_or(model);
+    let (mut name, mut version) = (Vec::new(), Vec::new());
+    for part in model.split('-') {
+        if !part.is_empty() && part.chars().all(|c| c.is_ascii_digit()) {
+            // Release dates like 20251101 are not part of the version
+            if part.len() < 8 {
+                version.push(part);
+            }
+        } else {
+            name.push(part);
+        }
+    }
+    match (name.is_empty(), version.is_empty()) {
+        (false, false) => format!("{}-{}", name.join("-"), version.join(".")),
+        (false, true) => name.join("-"),
+        _ => model.to_owned(),
+    }
 }
 
 fn is_command_wrapper(message: &str) -> bool {
@@ -404,7 +593,7 @@ mod tests {
         .join("\n");
 
         let conv = parse_jsonl(&content).unwrap();
-        assert_eq!(conv.summary.as_deref(), Some("Important topic discussion"));
+        assert_eq!(conv.title.as_deref(), Some("Important topic discussion"));
         assert!(conv.search_text.contains("important topic discussion"));
     }
 
@@ -456,7 +645,7 @@ mod tests {
         assert_eq!(resumed.preview, expected.preview);
         assert_eq!(resumed.message_count, expected.message_count);
         assert_eq!(resumed.project_path, expected.project_path);
-        assert_eq!(resumed.summary, expected.summary);
+        assert_eq!(resumed.title, expected.title);
     }
 
     #[test]
@@ -516,5 +705,96 @@ mod tests {
             "  <local-command-stdout></local-command-stdout>"
         ));
         assert!(!is_command_wrapper("Hello <command-name> world"));
+    }
+
+    #[test]
+    fn reads_session_metadata() {
+        let content = [
+            r#"{"type":"permission-mode","permissionMode":"plan","sessionId":"s"}"#.to_string(),
+            r#"{"type":"user","timestamp":"2024-01-01T00:00:00Z","gitBranch":"main","entrypoint":"sdk-cli","message":{"role":"user","content":"Hello"}}"#.to_string(),
+            r#"{"type":"assistant","timestamp":"2024-01-01T00:00:00Z","gitBranch":"feature-x","message":{"model":"claude-opus-4-5-20251101","content":[{"type":"text","text":"Hi"}]}}"#.to_string(),
+            r#"{"type":"assistant","timestamp":"2024-01-01T00:00:00Z","message":{"model":"<synthetic>","content":[{"type":"text","text":"err"}]}}"#.to_string(),
+            r#"{"type":"ai-title","aiTitle":"Old title","sessionId":"s"}"#.to_string(),
+            r#"{"type":"ai-title","aiTitle":"Generated title","sessionId":"s"}"#.to_string(),
+            r#"{"type":"last-prompt","lastPrompt":"latest   question","sessionId":"s"}"#.to_string(),
+            r#"{"type":"tools-used","tools":["Bash","mcp__figma__use_figma"],"sessionId":"s"}"#.to_string(),
+            r#"{"type":"cost-state","totalCostUSD":1.5,"totalLinesAdded":10,"totalLinesRemoved":3,"modelUsage":{}}"#.to_string(),
+            r#"{"type":"continued-in","continuedInSessionId":"next","sessionId":"s"}"#.to_string(),
+            r#"{"type":"system","subtype":"away_summary","content":"Did the thing. (disable recaps in /config)"}"#.to_string(),
+        ]
+        .join("\n");
+
+        let conv = parse_jsonl(&content).unwrap();
+        assert_eq!(conv.title.as_deref(), Some("Generated title"));
+        assert_eq!(conv.git_branch.as_deref(), Some("feature-x"));
+        assert_eq!(conv.model.as_deref(), Some("opus-4.5"));
+        assert_eq!(conv.last_prompt.as_deref(), Some("latest question"));
+        assert_eq!(conv.recap.as_deref(), Some("Did the thing."));
+        assert_eq!(conv.cost_usd, Some(1.5));
+        assert_eq!((conv.lines_added, conv.lines_removed), (10, 3));
+        assert_eq!(conv.permission_mode.as_deref(), Some("plan"));
+        assert_eq!(conv.continued_in.as_deref(), Some("next"));
+        assert!(conv.is_sdk);
+        assert!(conv.search_text.contains("generated title"));
+        assert!(conv.search_text.contains("mcp__figma__use_figma"));
+    }
+
+    #[test]
+    fn custom_title_beats_ai_title() {
+        let content = [
+            r#"{"type":"custom-title","customTitle":"Mine","sessionId":"s"}"#.to_string(),
+            r#"{"type":"ai-title","aiTitle":"Generated","sessionId":"s"}"#.to_string(),
+            r#"{"type":"summary","summary":"Old","leafUuid":"x"}"#.to_string(),
+            user_msg("Hello", None),
+        ]
+        .join("\n");
+        assert_eq!(
+            parse_jsonl(&content).unwrap().title.as_deref(),
+            Some("Mine")
+        );
+    }
+
+    #[test]
+    fn recap_is_dropped_by_a_later_message() {
+        let content = [
+            user_msg("First", None),
+            r#"{"type":"system","subtype":"away_summary","content":"Recap"}"#.to_string(),
+            user_msg("Second", None),
+        ]
+        .join("\n");
+        assert_eq!(parse_jsonl(&content).unwrap().recap, None);
+    }
+
+    #[test]
+    fn skips_injected_user_messages() {
+        let content = [
+            r#"{"type":"user","isMeta":true,"timestamp":"2024-01-01T00:00:00Z","message":{"content":"injected context"}}"#.to_string(),
+            r#"{"type":"user","isCompactSummary":true,"timestamp":"2024-01-01T00:00:00Z","message":{"content":"This session is being continued"}}"#.to_string(),
+            user_msg("Real question", None),
+        ]
+        .join("\n");
+        let conv = parse_jsonl(&content).unwrap();
+        assert_eq!(conv.message_count, 1);
+        assert_eq!(conv.preview, "Real question");
+        assert!(!conv.search_text.contains("injected"));
+    }
+
+    #[test]
+    fn unknown_permission_mode_is_not_passed_on() {
+        let content = [
+            r#"{"type":"permission-mode","permissionMode":"default","sessionId":"s"}"#.to_string(),
+            user_msg("Hello", None),
+        ]
+        .join("\n");
+        assert_eq!(parse_jsonl(&content).unwrap().permission_mode, None);
+    }
+
+    #[test]
+    fn shortens_model_names() {
+        assert_eq!(short_model_name("claude-opus-5-5"), "opus-5.5");
+        assert_eq!(short_model_name("claude-fable-5-1"), "fable-5.1");
+        assert_eq!(short_model_name("claude-opus-4-5-20251101"), "opus-4.5");
+        assert_eq!(short_model_name("claude-3-5-sonnet-20241022"), "sonnet-3.5");
+        assert_eq!(short_model_name("claude-opus-4-6"), "opus-4.6");
     }
 }

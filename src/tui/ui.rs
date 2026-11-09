@@ -1,9 +1,11 @@
+use crate::history::Conversation;
 use crate::search::{can_start_match, fold};
 use crate::tui::app::{App, LoadingState};
 use ratatui::layout::Position;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, Paragraph};
 use std::borrow::Cow;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 /// Lines per conversation item (header + preview + separator)
 pub const LINES_PER_ITEM: usize = 3;
@@ -97,9 +99,9 @@ fn render_search_bar(frame: &mut Frame, app: &App, area: Rect) {
     };
 
     let query = app.query();
-    let prompt_len = PROMPT.chars().count();
-    let left_len = prompt_len + query.chars().count();
-    let count_len = status_text.chars().count() + 1;
+    let prompt_len = text_width(PROMPT);
+    let left_len = prompt_len + text_width(query);
+    let count_len = text_width(&status_text) + 1;
     let padding = (area.width as usize).saturating_sub(left_len + count_len + 1);
 
     let status_style = Style::default().fg(if app.is_loading() { ACCENT } else { LABEL });
@@ -121,7 +123,8 @@ fn render_search_bar(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(input, area);
 
     if area.width as usize > prompt_len {
-        let cursor_offset = app.cursor_pos() as u16;
+        let before_cursor: String = query.chars().take(app.cursor_pos()).collect();
+        let cursor_offset = text_width(&before_cursor) as u16;
         let max_x = area.x + area.width.saturating_sub(2);
         let cursor_x = (area.x + prompt_len as u16)
             .saturating_add(cursor_offset)
@@ -148,139 +151,218 @@ fn render_list(frame: &mut Frame, app: &App, area: Rect) {
         .take(visible_count)
         .enumerate()
         .map(|(relative_idx, &conv_idx)| {
-            let list_idx = offset + relative_idx;
             let conv = &app.conversations()[conv_idx];
-            let is_selected = app.selected() == Some(list_idx);
-
-            let timestamp = conv.timestamp.format("%b %d, %H:%M").to_string();
-
-            let msg_count = if conv.message_count == 1 {
-                "1 msg".to_string()
-            } else {
-                format!("{} msgs", conv.message_count)
-            };
-
-            let duration = conv.duration_minutes.map(|m| {
-                if m >= 60 {
-                    format!("{}h {}m", m / 60, m % 60)
-                } else {
-                    format!("{}m", m)
-                }
-            });
-
-            let indicator = " ▌ ";
-            let indicator_style = Style::default().fg(if is_selected { ACCENT } else { BORDER });
-
-            let project_part = conv.project_name.as_str();
-
-            let duration_len = duration
-                .as_ref()
-                .map(|d| d.chars().count() + 3)
-                .unwrap_or(0);
-            let right_len =
-                msg_count.chars().count() + duration_len + 3 + timestamp.chars().count();
-            let indicator_len = indicator.chars().count();
-            let project_len = project_part.chars().count();
-            let min_padding = 2;
-
-            let available_for_summary =
-                width.saturating_sub(indicator_len + project_len + right_len + min_padding + 4);
-
-            let summary_part = conv
-                .summary
-                .as_ref()
-                .filter(|s| !s.is_empty() && available_for_summary > 5)
-                .map(|s| format!(" · {}", truncate(s, available_for_summary)));
-
-            let left_len = indicator_len
-                + project_len
-                + summary_part
-                    .as_ref()
-                    .map(|s| s.chars().count())
-                    .unwrap_or(0);
-            let padding = width.saturating_sub(left_len + right_len + 1);
-
-            let project_style = if is_selected {
-                Style::default().fg(Color::White).bold()
-            } else {
-                Style::default().fg(Color::White)
-            };
-
-            let summary_style = Style::default().fg(Color::Rgb(140, 155, 175));
-            let summary_highlight_style = Style::default().fg(Color::Rgb(180, 195, 215));
-
-            let highlight_style = if is_selected {
-                Style::default().fg(ACCENT).bold()
-            } else {
-                Style::default().fg(ACCENT)
-            };
-
-            let selection_bg = if is_selected {
-                Style::default().bg(Color::Rgb(45, 45, 55))
-            } else {
-                Style::default()
-            };
-
-            let mut header_spans = vec![Span::styled(indicator, indicator_style)];
-            header_spans.extend(highlight_text(
-                project_part,
-                query_words,
-                project_style,
-                highlight_style,
-            ));
-
-            if let Some(ref summary) = summary_part {
-                header_spans.extend(highlight_text(
-                    summary,
-                    query_words,
-                    summary_style,
-                    summary_highlight_style,
-                ));
-            }
-
-            header_spans.push(Span::raw(" ".repeat(padding)));
-            header_spans.push(Span::styled(
-                msg_count,
-                Style::default().fg(Color::Rgb(110, 110, 110)),
-            ));
-            if let Some(ref d) = duration {
-                header_spans.push(Span::styled(" · ", Style::default().fg(SEPARATOR)));
-                header_spans.push(Span::styled(
-                    d.clone(),
-                    Style::default().fg(Color::Rgb(100, 140, 130)),
-                ));
-            }
-            header_spans.push(Span::styled(" · ", Style::default().fg(SEPARATOR)));
-            header_spans.push(Span::styled(
-                timestamp,
-                Style::default().fg(Color::Rgb(140, 140, 140)),
-            ));
-
-            let header = Line::from(header_spans).style(selection_bg);
-
-            // Preview line
-            let truncated_preview = truncate(&conv.preview, width.saturating_sub(4));
-            let preview_style = Style::default().fg(Color::Rgb(130, 130, 130));
-            let mut preview_spans = vec![Span::styled(indicator, indicator_style)];
-            preview_spans.extend(highlight_text(
-                &truncated_preview,
-                query_words,
-                preview_style,
-                Style::default().fg(Color::Rgb(180, 180, 180)),
-            ));
-            let preview = Line::from(preview_spans).style(selection_bg);
-
-            let separator = Line::from(Span::styled(
-                separator_str.as_str(),
-                Style::default().fg(Color::Rgb(50, 50, 50)),
-            ));
-
-            ListItem::new(vec![header, preview, separator])
+            let is_selected = app.selected() == Some(offset + relative_idx);
+            render_item(conv, is_selected, width, query_words, &separator_str)
         })
         .collect();
 
     let list = List::new(visible_items);
     frame.render_widget(list, area);
+}
+
+/// Room the title keeps before metadata on the right starts being dropped
+const TITLE_ROOM: usize = 24;
+const META_SEPARATOR: &str = " · ";
+
+/// A piece of header metadata; when the line is too narrow the piece with
+/// the lowest `priority` is dropped first
+struct Meta {
+    text: String,
+    style: Style,
+    priority: u8,
+}
+
+fn render_item<'a>(
+    conv: &Conversation,
+    is_selected: bool,
+    width: usize,
+    query_words: &[String],
+    separator: &'a str,
+) -> ListItem<'a> {
+    let indicator = " ▌ ";
+    let indicator_style = Style::default().fg(if is_selected { ACCENT } else { BORDER });
+    let highlight_style = if is_selected {
+        Style::default().fg(ACCENT).bold()
+    } else {
+        Style::default().fg(ACCENT)
+    };
+    let selection_bg = if is_selected {
+        Style::default().bg(Color::Rgb(45, 45, 55))
+    } else {
+        Style::default()
+    };
+
+    let mut meta = Vec::new();
+    let mut add = |text: String, color: Color, priority: u8| {
+        meta.push(Meta {
+            text,
+            style: Style::default().fg(color),
+            priority,
+        })
+    };
+    if conv.continued_in.is_some() {
+        add("↪ continued".into(), Color::Rgb(200, 160, 90), 6);
+    }
+    if conv.is_sdk {
+        add("sdk".into(), Color::Rgb(120, 120, 150), 2);
+    }
+    if let Some(model) = &conv.model {
+        add(model.clone(), Color::Rgb(150, 130, 190), 1);
+    }
+    if let Some(cost) = conv.cost_usd {
+        add(format_cost(cost), Color::Rgb(190, 170, 110), 3);
+    }
+    if conv.lines_added + conv.lines_removed > 0 {
+        let lines = format!("+{} -{}", conv.lines_added, conv.lines_removed);
+        add(lines, Color::Rgb(110, 150, 120), 0);
+    }
+    let msg_count = match conv.message_count {
+        1 => "1 msg".to_string(),
+        n => format!("{n} msgs"),
+    };
+    add(msg_count, Color::Rgb(110, 110, 110), 9);
+    if let Some(m) = conv.duration_minutes {
+        let duration = if m >= 60 {
+            format!("{}h {}m", m / 60, m % 60)
+        } else {
+            format!("{m}m")
+        };
+        add(duration, Color::Rgb(100, 140, 130), 4);
+    }
+    let timestamp = conv.timestamp.format("%b %d, %H:%M").to_string();
+    add(timestamp, Color::Rgb(140, 140, 140), 10);
+
+    let project = conv.project_name.as_str();
+    let branch = conv.git_branch.as_ref().map(|b| format!("@{b}"));
+    let left_base =
+        text_width(indicator) + text_width(project) + branch.as_ref().map_or(0, |b| text_width(b));
+    let meta_len = |meta: &[Meta]| {
+        meta.iter().map(|m| text_width(&m.text)).sum::<usize>()
+            + text_width(META_SEPARATOR) * meta.len().saturating_sub(1)
+    };
+    let title_room = if conv.title.is_some() { TITLE_ROOM } else { 0 };
+    // Message count and time always stay
+    while meta.len() > 2 && left_base + meta_len(&meta) + title_room + 2 > width {
+        let lowest = meta
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, m)| m.priority)
+            .map(|(i, _)| i);
+        if let Some(i) = lowest {
+            meta.remove(i);
+        }
+    }
+    let right_len = meta_len(&meta);
+
+    let available_for_title = width.saturating_sub(left_base + right_len + 6);
+    let title_part = conv
+        .title
+        .as_ref()
+        .filter(|s| !s.is_empty() && available_for_title > 5)
+        .map(|s| format!("{META_SEPARATOR}{}", truncate(s, available_for_title)));
+
+    let left_len = left_base + title_part.as_ref().map_or(0, |s| text_width(s));
+    let padding = width.saturating_sub(left_len + right_len + 1);
+
+    let project_style = if is_selected {
+        Style::default().fg(Color::White).bold()
+    } else {
+        Style::default().fg(Color::White)
+    };
+
+    let mut header_spans = vec![Span::styled(indicator, indicator_style)];
+    header_spans.extend(highlight_text(
+        project,
+        query_words,
+        project_style,
+        highlight_style,
+    ));
+    if let Some(branch) = &branch {
+        header_spans.extend(highlight_text(
+            branch,
+            query_words,
+            Style::default().fg(Color::Rgb(110, 130, 150)),
+            highlight_style,
+        ));
+    }
+    if let Some(title) = &title_part {
+        header_spans.extend(highlight_text(
+            title,
+            query_words,
+            Style::default().fg(Color::Rgb(140, 155, 175)),
+            Style::default().fg(Color::Rgb(180, 195, 215)),
+        ));
+    }
+    header_spans.push(Span::raw(" ".repeat(padding)));
+    for (i, m) in meta.into_iter().enumerate() {
+        if i > 0 {
+            header_spans.push(Span::styled(META_SEPARATOR, Style::default().fg(SEPARATOR)));
+        }
+        header_spans.push(Span::styled(m.text, m.style));
+    }
+    let header = Line::from(header_spans).style(selection_bg);
+
+    // Preview line: the recap if there is one, else the first messages and
+    // the latest prompt
+    let available = width.saturating_sub(4);
+    let preview_style = Style::default().fg(Color::Rgb(130, 130, 130));
+    let preview_highlight = Style::default().fg(Color::Rgb(180, 180, 180));
+    let mut preview_spans = vec![Span::styled(indicator, indicator_style)];
+    let last_prompt = conv
+        .last_prompt
+        .as_ref()
+        .filter(|p| !conv.preview.starts_with(p.as_str()));
+    if let Some(recap) = &conv.recap {
+        preview_spans.push(Span::styled("↻ ", Style::default().fg(ACCENT)));
+        preview_spans.extend(highlight_text(
+            &truncate(recap, available.saturating_sub(2)),
+            query_words,
+            Style::default().fg(Color::Rgb(150, 165, 160)),
+            preview_highlight,
+        ));
+    } else if let Some(last) = last_prompt {
+        const ARROW: &str = " » ";
+        let arrow_len = text_width(ARROW);
+        let first_len = (available / 2).max(available.saturating_sub(text_width(last) + arrow_len));
+        preview_spans.extend(highlight_text(
+            &truncate(&conv.preview, first_len),
+            query_words,
+            preview_style,
+            preview_highlight,
+        ));
+        preview_spans.push(Span::styled(ARROW, Style::default().fg(ACCENT)));
+        preview_spans.extend(highlight_text(
+            &truncate(last, available.saturating_sub(first_len + arrow_len)),
+            query_words,
+            Style::default().fg(Color::Rgb(160, 160, 160)),
+            preview_highlight,
+        ));
+    } else {
+        preview_spans.extend(highlight_text(
+            &truncate(&conv.preview, available),
+            query_words,
+            preview_style,
+            preview_highlight,
+        ));
+    }
+    let preview = Line::from(preview_spans).style(selection_bg);
+
+    let separator = Line::from(Span::styled(
+        separator,
+        Style::default().fg(Color::Rgb(50, 50, 50)),
+    ));
+
+    ListItem::new(vec![header, preview, separator])
+}
+
+/// `$0.42`, `$9.66`, `$123`
+fn format_cost(cost: f64) -> String {
+    if cost >= 100.0 {
+        format!("${cost:.0}")
+    } else {
+        format!("${cost:.2}")
+    }
 }
 
 /// Split text into spans with matched portions highlighted (case-insensitive)
@@ -352,12 +434,27 @@ fn highlight_text(
     }
 }
 
-/// Shorten `s` to at most `max` chars, ending with `…` when cut
+/// Terminal cells `s` takes up (CJK characters take two)
+fn text_width(s: &str) -> usize {
+    UnicodeWidthStr::width(s)
+}
+
+/// Shorten `s` to at most `max` terminal cells, ending with `…` when cut
 fn truncate(s: &str, max: usize) -> Cow<'_, str> {
-    if s.chars().count() <= max {
+    if text_width(s) <= max {
         return Cow::Borrowed(s);
     }
-    let mut cut: String = s.chars().take(max.saturating_sub(1)).collect();
+    let budget = max.saturating_sub(1);
+    let mut cut = String::new();
+    let mut used = 0;
+    for c in s.chars() {
+        let w = c.width().unwrap_or(0);
+        if used + w > budget {
+            break;
+        }
+        used += w;
+        cut.push(c);
+    }
     cut.push('…');
     Cow::Owned(cut)
 }

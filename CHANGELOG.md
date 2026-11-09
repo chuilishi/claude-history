@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased
+
+- Conversations show their title again: the `/rename` title, else the title
+  Claude Code generates (`ai-title`), else an old-style `summary`. Newer
+  Claude Code versions stopped writing `summary`, so titles had gone blank
+- The header shows the git branch (`project@branch`), the model that
+  answered last, the session cost, lines added/removed, and tags for
+  sessions continued elsewhere (`↪ continued`) or started via the SDK
+  (`sdk`). Less important parts are dropped first on narrow terminals
+- The preview line shows Claude's "while you were away" recap when there is
+  one, otherwise the first messages followed by `» latest prompt`
+- Search also matches the title, branch, model, recap, tools and subagents
+  used (e.g. `figma`, `bash`)
+- Resumed sessions keep their last permission mode (`--permission-mode`)
+- Context injected by Claude Code (`isMeta`) and compaction summaries are no
+  longer shown or counted as messages
+- Bulky log lines (API request records, file history, queue operations) are
+  skipped before JSON parsing
+- Layout and the search cursor account for double-width CJK characters
+
 ## v0.1.27 (2026-11-09)
 
 - Resumed conversations are launched with `--allow-dangerously-skip-permissions`,

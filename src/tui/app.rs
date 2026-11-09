@@ -22,6 +22,8 @@ pub enum Action {
     Resume {
         session_id: String,
         project_path: PathBuf,
+        /// The session's last permission mode, restored on resume
+        permission_mode: Option<String>,
     },
     Quit,
 }
@@ -127,6 +129,7 @@ impl App {
         Some(Action::Resume {
             session_id: hidden::session_id(&conv.path)?.to_owned(),
             project_path: conv.project_path.clone(),
+            permission_mode: conv.permission_mode.clone(),
         })
     }
 

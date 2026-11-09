@@ -34,12 +34,17 @@ fn run() -> Result<()> {
         tui::Action::Resume {
             session_id,
             project_path,
-        } => resume_with_claude(&session_id, &project_path),
+            permission_mode,
+        } => resume_with_claude(&session_id, &project_path, permission_mode.as_deref()),
         tui::Action::Quit => Err(AppError::SelectionCancelled),
     }
 }
 
-fn resume_with_claude(session_id: &str, project_dir: &Path) -> Result<()> {
+fn resume_with_claude(
+    session_id: &str,
+    project_dir: &Path,
+    permission_mode: Option<&str>,
+) -> Result<()> {
     if !project_dir.is_dir() {
         return Err(AppError::ClaudeExecutionError(format!(
             "Project directory no longer exists: {}",
@@ -53,6 +58,9 @@ fn resume_with_claude(session_id: &str, project_dir: &Path) -> Result<()> {
         session_id,
         "--allow-dangerously-skip-permissions",
     ]);
+    if let Some(mode) = permission_mode {
+        command.args(["--permission-mode", mode]);
+    }
     command.current_dir(project_dir);
 
     run_claude_command(command)

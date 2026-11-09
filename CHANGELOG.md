@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+- Added `claude-history search` and `claude-history show`, which print
+  matches as plain text, and a `find-conversation` skill (in `skill/`) that
+  lets Claude use them to find a conversation from a vague description
+- Added `--version`. The install script calls it to check the installed
+  binary, so installing through `install.sh` used to end with "binary exists
+  but failed to run", and upgrades showed the old version as `unknown`
+- Windows install script: `irm .../scripts/install.ps1 | iex` downloads the
+  binary, verifies its checksum, adds it to the user PATH and upgrades an
+  existing install. Works in Windows PowerShell 5.1 and PowerShell 7
+- Both install scripts download from `releases/latest/download` instead of
+  asking the GitHub API for the latest version, whose 60 requests/hour limit
+  per IP is easily used up behind shared proxies
+
 ## v0.1.29 (2026-11-09)
 
 - The session cost is no longer shown in the header

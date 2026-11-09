@@ -9,9 +9,14 @@ use error::{AppError, Result};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// Takes no arguments; parsing still provides `--help` and rejects typos.
+/// Takes no arguments; parsing still provides `--help`/`--version` and
+/// rejects typos. `scripts/install.sh` reads the `vX.Y.Z` from `--version`.
 #[derive(Parser)]
-#[command(name = "claude-history", about = "Resume Claude conversations")]
+#[command(
+    name = "claude-history",
+    about = "Resume Claude conversations",
+    version = concat!("v", env!("CARGO_PKG_VERSION"))
+)]
 struct Args;
 
 fn main() {

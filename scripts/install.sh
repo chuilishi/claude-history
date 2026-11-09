@@ -89,41 +89,22 @@ install_from_release() {
 	tmp_dir=$(mktemp -d)
 	trap 'rm -rf "$tmp_dir"' EXIT
 
-	# Get latest release version (or use override)
+	# `releases/latest/download` redirects to the newest release's file. Unlike
+	# the GitHub API it is not rate limited (60 requests/hour per IP, often
+	# exhausted behind shared proxies); the version is read from the binary.
 	local version="${CLAUDE_HISTORY_VERSION:-}"
-
-	if [ -z "$version" ]; then
-		log_info "Fetching latest release..."
-		local latest_url="https://api.github.com/repos/chuilishi/claude-history/releases/latest"
-		local release_json
-
-		if command -v curl &>/dev/null; then
-			release_json=$(curl -fsSL --retry 3 --retry-connrefused --connect-timeout 10 --max-time 30 "$latest_url")
-		elif command -v wget &>/dev/null; then
-			release_json=$(wget --tries=3 --timeout=30 -qO- "$latest_url")
-		else
-			log_error "Neither curl nor wget found. Please install one of them."
-			exit 1
-		fi
-
-		version=$(echo "$release_json" | grep '"tag_name"' | sed -E 's/.*"tag_name": "([^"]+)".*/\1/')
-
-		if [ -z "$version" ]; then
-			log_error "Failed to fetch latest version"
-			echo ""
-			echo "This might be due to network issues or GitHub API rate limits."
-			echo "You can specify a version manually:"
-			echo "  CLAUDE_HISTORY_VERSION=v0.1.13 bash install.sh"
-			echo ""
-			exit 1
-		fi
+	local base_url
+	if [ -n "$version" ]; then
+		[[ "$version" == v* ]] || version="v$version"
+		log_info "Installing pinned version: $version"
+		base_url="https://github.com/chuilishi/claude-history/releases/download/${version}"
+	else
+		log_info "Installing the latest release"
+		base_url="https://github.com/chuilishi/claude-history/releases/latest/download"
 	fi
 
-	log_info "Installing version: $version"
-
-	# Download URL
 	local archive_name="claude-history-${platform}.tar.gz"
-	local download_url="https://github.com/chuilishi/claude-history/releases/download/${version}/${archive_name}"
+	local download_url="${base_url}/${archive_name}"
 
 	log_info "Downloading $archive_name..."
 
@@ -155,7 +136,7 @@ install_from_release() {
 	# Download and verify checksum
 	log_info "Verifying checksum..."
 	local checksum_file="claude-history-${platform}.sha256"
-	local checksum_url="https://github.com/chuilishi/claude-history/releases/download/${version}/${checksum_file}"
+	local checksum_url="${base_url}/${checksum_file}"
 
 	if command -v curl &>/dev/null; then
 		if ! curl -fsSL --retry 3 --retry-connrefused --connect-timeout 10 --max-time 30 -o "$checksum_file" "$checksum_url"; then
@@ -216,12 +197,15 @@ install_from_release() {
 		fi
 	fi
 
+	local new_version
+	new_version=$(./claude-history --version 2>/dev/null | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' || true)
+
 	# Check for existing installation
 	if [ -f "$install_dir/claude-history" ]; then
 		local existing_version
 		existing_version=$("$install_dir/claude-history" --version 2>/dev/null | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' || echo "unknown")
 		log_info "Existing installation found: $existing_version"
-		log_info "Upgrading to: $version"
+		log_info "Upgrading to: ${new_version:-${version:-latest}}"
 	fi
 
 	# Install binary atomically

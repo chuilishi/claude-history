@@ -21,16 +21,41 @@
 
 ## 安装
 
+macOS / Linux：
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/chuilishi/claude-history/main/scripts/install.sh | bash
+```
+
+Windows（PowerShell）：
+
+```powershell
+irm https://raw.githubusercontent.com/chuilishi/claude-history/main/scripts/install.ps1 | iex
+```
+
+两种方式都会从 [Releases 页面](https://github.com/chuilishi/claude-history/releases)下载对应平台的预编译二进制，并校验 checksum。再运行一次同样的命令就能升级。设置 `CLAUDE_HISTORY_VERSION`（如 `v0.1.30`）可以锁定版本，`CLAUDE_HISTORY_INSTALL_DIR` 可以指定安装目录。
+
+装了 Rust 的话也可以从源码编译：
+
 ```sh
 cargo install claude-history-resume
 ```
 
-crate 名为 `claude-history-resume`（`claude-history` 已被上游项目占用），安装后的命令仍是 `claude-history`。也可以从 [Releases 页面](https://github.com/chuilishi/claude-history/releases)下载预编译的二进制。
+crate 名为 `claude-history-resume`（`claude-history` 已被上游项目占用），安装后的命令仍是 `claude-history`。
 
 ## 使用
 
 ```sh
 claude-history
+```
+
+## 让 Claude 帮你找对话
+
+`claude-history search <关键词>` 和 `claude-history show <id>` 以纯文本输出结果。`find-conversation` skill 会让 Claude 用这两个命令检索，而不是直接读原始日志。这样在任何 Claude Code 会话里都可以问「之前修代理那个对话是哪次？」。安装：
+
+```sh
+mkdir -p ~/.claude/skills/find-conversation
+cp skill/find-conversation/SKILL.md ~/.claude/skills/find-conversation/
 ```
 
 ## 致谢

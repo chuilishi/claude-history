@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.1.28 (2026-11-09)
 
 - Conversations show their title again: the `/rename` title, else the title
   Claude Code generates (`ai-title`), else an old-style `summary`. Newer
